@@ -1,0 +1,29 @@
+{
+  "name": "planes",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "devDependencies": {
+    "@gltf-transform/cli": "^4.3.0",
+    "@vitejs/plugin-react": "^5.0.4",
+    "draco3dgltf": "^1.5.7",
+    "playwright": "^1.58.2",
+    "vite": "^7.2.4",
+    "wrangler": "^4.80.0"
+  },
+  "dependencies": {
+    "@react-three/fiber": "^9.4.0",
+    "@react-three/postprocessing": "^3.0.4",
+    "lil-gui": "^0.21.0",
+    "postprocessing": "^6.36.6",
+    "react": "^19.1.1",
+    "react-dom": "^19.1.1",
+    "three": "^0.182.0",
+    "troika-three-text": "^0.52.4"
+  }
+}
