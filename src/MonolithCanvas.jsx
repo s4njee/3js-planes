@@ -143,6 +143,7 @@ function MonolithScene() {
   const modelCacheRef = useRef(new Map()); // session cache keyed by model path; see TODO in root ToDo.md #6
   const mixerRef = useRef(null);
   const monolithRef = useRef(new THREE.Group());
+  const heatShimmerRef = useRef(null);
   const stateRef = useRef(createInitialMonolithState());
   const glitchTriggerTokenRef = useRef(0);
   const [effectSnapshot, setEffectSnapshot] = useState(() => (
@@ -269,6 +270,11 @@ function MonolithScene() {
     }
 
     scene.remove(monolithRef.current);
+    model.rotation.set(
+      guiParamsRef.current.modelRotationX,
+      guiParamsRef.current.modelRotationY,
+      guiParamsRef.current.modelRotationZ
+    );
     monolithRef.current = model;
     scene.add(monolithRef.current);
 
@@ -600,6 +606,105 @@ function MonolithScene() {
 
     scene.add(monolithRef.current);
 
+    // Create heat shimmer mesh behind the monolith
+    const shimmerGroup = new THREE.Group();
+    shimmerGroup.visible = false;
+
+    const shimmerGeoLeft = new THREE.CylinderGeometry(0.2, 0.0, 3.5, 32, 1, true);
+    shimmerGeoLeft.rotateZ(Math.PI / 2); // align along local X axis
+
+    const shimmerGeoRight = new THREE.CylinderGeometry(0.2, 0.0, 3.5, 32, 1, true);
+    shimmerGeoRight.rotateZ(Math.PI / 2);
+
+    const shimmerMat = new THREE.ShaderMaterial({
+      transparent: true,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+      uniforms: {
+        time: { value: 0 },
+        boostIntensity: { value: 0 },
+      },
+      vertexShader: `
+        uniform float time;
+        uniform float boostIntensity;
+        varying vec2 vUv;
+        
+        float hash(vec2 p) { return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453); }
+        float noise(vec2 p) {
+          vec2 i = floor(p); vec2 f = fract(p);
+          vec2 u = f * f * (3.0 - 2.0 * f);
+          return mix(mix(hash(i + vec2(0.0,0.0)), hash(i + vec2(1.0,0.0)), u.x),
+                     mix(hash(i + vec2(0.0,1.0)), hash(i + vec2(1.0,1.0)), u.x), u.y);
+        }
+
+        void main() {
+          vUv = uv;
+          vec3 pos = position;
+          
+          // Anchor the effect: zero displacement at base (vUv.y == 1), max at the tip
+          float tailFade = 1.0 - vUv.y;
+          
+          float ny = noise(vec2(vUv.x * 5.0, time * 15.0)) - 0.5;
+          float nz = noise(vec2(vUv.x * 5.0 + 100.0, time * 15.0)) - 0.5;
+          float nx = noise(vec2(time * 20.0, 0.0)) - 0.5;
+          
+          // Add turbulent rippling to the cone profile
+          pos.y += ny * 0.15 * boostIntensity * tailFade;
+          pos.z += nz * 0.15 * boostIntensity * tailFade;
+          // Pulse the length of the flame slightly
+          pos.x += nx * 0.3 * boostIntensity * tailFade;
+
+          gl_Position = projectionMatrix * modelViewMatrix * vec4(pos, 1.0);
+        }
+      `,
+      fragmentShader: `
+        uniform float time;
+        uniform float boostIntensity;
+        varying vec2 vUv;
+        
+        // Simple 2D noise
+        float hash(vec2 p) { return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453); }
+        float noise(vec2 p) {
+          vec2 i = floor(p); vec2 f = fract(p);
+          vec2 u = f * f * (3.0 - 2.0 * f);
+          return mix(mix(hash(i + vec2(0.0,0.0)), hash(i + vec2(1.0,0.0)), u.x),
+                     mix(hash(i + vec2(0.0,1.0)), hash(i + vec2(1.0,1.0)), u.x), u.y);
+        }
+        
+        void main() {
+          if (boostIntensity < 0.01) discard;
+          
+          // Scroll noise along V (z-axis of cylinder)
+          vec2 uv1 = vec2(vUv.x * 4.0, vUv.y * 3.0 - time * 5.0);
+          vec2 uv2 = vec2(vUv.x * 3.0 - time * 2.0, vUv.y * 5.0 - time * 8.0);
+          
+          float n = noise(uv1) * 0.5 + noise(uv2) * 0.5;
+          
+          // Fade edges less aggressively
+          float edge = sin(vUv.x * 3.14159);
+          float distFade = pow(1.0 - vUv.y, 0.6); // Stays visible further down the tail
+          
+          // Increase baseline intensity
+          float intensity = n * edge * distFade * boostIntensity;
+          
+          // Make it redder with a hot yellow core
+          vec3 color = mix(vec3(1.0, 0.0, 0.0), vec3(1.0, 0.3, 0.0), n); // Deep red / bright orange
+          color = mix(color, vec3(1.0, 0.8, 0.2), pow(n, 3.0)); // Yellow/white hot core
+          
+          // Boost visibility multiplier
+          gl_FragColor = vec4(color * intensity * 4.0, intensity * 2.0);
+        }
+      `
+    });
+    
+    const meshLeft = new THREE.Mesh(shimmerGeoLeft, shimmerMat);
+    const meshRight = new THREE.Mesh(shimmerGeoRight, shimmerMat);
+    shimmerGroup.add(meshLeft);
+    shimmerGroup.add(meshRight);
+
+    scene.add(shimmerGroup);
+    heatShimmerRef.current = shimmerGroup;
+
     overlaysRef.current = createOverlays(scene);
 
     lightingRigRef.current = createLightingRig({
@@ -608,6 +713,7 @@ function MonolithScene() {
       getCurrentModelIndex: () => stateRef.current.currentModelIndex,
       getMonolith: () => monolithRef.current,
       guiParams: guiParamsRef.current,
+      getIsBoosting: () => stateRef.current.animationSpeedBoostEnabled && supportsAnimationSpeedBoost(),
     });
 
     uiRef.current = createUI({
@@ -631,6 +737,15 @@ function MonolithScene() {
       },
       onEffectSettingsChange: syncEffectSnapshot,
       onTriggerGlitch: () => syncEffectSnapshot({ triggerGlitch: true }),
+      onModelRotationChange: () => {
+        if (monolithRef.current) {
+          monolithRef.current.rotation.set(
+            guiParamsRef.current.modelRotationX,
+            guiParamsRef.current.modelRotationY,
+            guiParamsRef.current.modelRotationZ
+          );
+        }
+      },
     });
 
     const progressContainer = document.createElement('div');
@@ -727,6 +842,14 @@ function MonolithScene() {
       overlaysRef.current?.destroy();
       progressContainer.remove();
       scene.remove(monolithRef.current);
+      if (heatShimmerRef.current) {
+        scene.remove(heatShimmerRef.current);
+        heatShimmerRef.current.children.forEach((child) => {
+          child.geometry.dispose();
+          // The material is shared so this disposes it twice, but Three handles it safely
+          child.material.dispose();
+        });
+      }
       scene.environment = null;
       scene.background = null;
       dracoLoader.dispose();
@@ -742,6 +865,39 @@ function MonolithScene() {
     controlsRef.current?.update();
     mixerRef.current?.update(delta);
     materialManagerRef.current?.updateXrayAnimation(elapsed);
+
+    if (heatShimmerRef.current && heatShimmerRef.current.children.length === 2) {
+      const isEligibleModel = stateRef.current.currentModelIndex === 0 || stateRef.current.currentModelIndex === 1;
+      const isBoosting = isEligibleModel && stateRef.current.animationSpeedBoostEnabled && supportsAnimationSpeedBoost();
+      
+      const leftMesh = heatShimmerRef.current.children[0];
+      const rightMesh = heatShimmerRef.current.children[1];
+      const mat = leftMesh.material;
+      
+      const currentIntensity = mat.uniforms.boostIntensity.value;
+      const targetIntensity = isBoosting ? 1.0 : 0.0;
+      
+      mat.uniforms.boostIntensity.value = THREE.MathUtils.lerp(currentIntensity, targetIntensity, delta * 10);
+      mat.uniforms.time.value = elapsed;
+      
+      heatShimmerRef.current.visible = mat.uniforms.boostIntensity.value > 0.01;
+      
+      leftMesh.position.set(
+        guiParamsRef.current.shimmerOffsetX,
+        guiParamsRef.current.shimmerOffsetY,
+        guiParamsRef.current.shimmerOffsetZ
+      );
+      rightMesh.position.set(
+        guiParamsRef.current.shimmerOffsetX,
+        guiParamsRef.current.shimmerOffsetY,
+        -guiParamsRef.current.shimmerOffsetZ
+      );
+      
+      if (monolithRef.current) {
+        heatShimmerRef.current.position.copy(monolithRef.current.position);
+        heatShimmerRef.current.rotation.copy(monolithRef.current.rotation);
+      }
+    }
 
     if (stateRef.current.hueCycleEnabled) {
       guiParamsRef.current.hue = getHueCycleHue(

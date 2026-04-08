@@ -13,7 +13,7 @@ export const MODEL_SET_DEF = {
     { key: '7', name: 'U-2', path: '/set3/Meshy_AI_B_52_Stratofortress_i_0404142231_texture.glb' },
   ],
   defaultModel: 0,
-  defaultLighting: 0,
+  defaultLighting: 1, // 1 is B (Particles)
   lightingStyle: 'pointRing',
   nullBackground: true,
   positionYOffset: 0.8,

@@ -12,7 +12,7 @@ import { resolveAssetUrl } from './asset-url.js';
 // The returned object exposes only the methods MonolithScene needs;
 // all internal light instances and buffers are fully encapsulated.
 
-export function createLightingRig({ scene, currentSetDef, getCurrentModelIndex, getMonolith, guiParams }) {
+export function createLightingRig({ scene, currentSetDef, getCurrentModelIndex, getMonolith, guiParams, getIsBoosting }) {
   // ── Animation constants ─────────────────────────────────────────────────────
   const RING_TOP = 8;        // World-space Y where a moving ring light starts
   const RING_BOTTOM = -3;    // World-space Y where it exits the frame
@@ -234,13 +234,24 @@ export function createLightingRig({ scene, currentSetDef, getCurrentModelIndex, 
 
   function animateParticlePositions({ nowMs }) {
     const positions = particles.geometry.attributes.position.array;
+    const isBoosting = getIsBoosting ? getIsBoosting() : false;
+
     for (let i = 0; i < particleCount; i++) {
-      positions[i * 3 + 1] -= velocities[i];
-      positions[i * 3] += Math.sin(nowMs * 0.001 + i) * 0.002;
-      if (positions[i * 3 + 1] < -1) {
-        positions[i * 3 + 1] = 25;
-        positions[i * 3] = (Math.random() - 0.5) * 30;
-        positions[i * 3 + 2] = (Math.random() - 0.5) * 50;
+        if (isBoosting) {
+          positions[i * 3 + 2] += velocities[i] * 40.0; // Fast wind along Z axis
+          if (positions[i * 3 + 2] > 25) { // Reset Z when passing camera
+            positions[i * 3 + 2] = -50;
+            positions[i * 3 + 1] = (Math.random() - 0.5) * 30;
+            positions[i * 3] = (Math.random() - 0.5) * 50;
+          }
+        } else {
+          positions[i * 3 + 1] -= velocities[i];
+          positions[i * 3] += Math.sin(nowMs * 0.001 + i) * 0.002;
+          if (positions[i * 3 + 1] < -1) {
+            positions[i * 3 + 1] = 25;
+            positions[i * 3] = (Math.random() - 0.5) * 30;
+            positions[i * 3 + 2] = (Math.random() - 0.5) * 50;
+          }
       }
     }
     particles.geometry.attributes.position.needsUpdate = true;

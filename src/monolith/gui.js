@@ -55,7 +55,13 @@ export function createDefaultGuiParams() {
     ambientColor: '#ffffff',
     backgroundColor: '#111111',
     whiteMode: false,
-    lightingMode: lightingModes[0],
+    lightingMode: lightingModes[1],
+    modelRotationX: 0.0,
+    modelRotationY: -1.58,
+    modelRotationZ: -0.33,
+    shimmerOffsetX: 6.13,
+    shimmerOffsetY: 0.41,
+    shimmerOffsetZ: 1.4,
   };
 }
 
@@ -70,6 +76,7 @@ export function createGuiControls({
   onWhiteModeChange,
   onLightingModeChange,
   onTriggerGlitch,
+  onModelRotationChange,
 }) {
   const lightingModes = ['A (Scene)', 'B (Particles)'];
 
@@ -151,6 +158,16 @@ export function createGuiControls({
   sceneFolder.add(guiParams, 'lightingMode', lightingModes).name('Lighting Mode').onChange((value) => {
     onLightingModeChange(Math.max(lightingModes.indexOf(value), 0));
   });
+
+  const transformFolder = gui.addFolder('Model Transform');
+  transformFolder.add(guiParams, 'modelRotationX', -Math.PI, Math.PI, 0.01).name('Rotation X').onChange(onModelRotationChange);
+  transformFolder.add(guiParams, 'modelRotationY', -Math.PI, Math.PI, 0.01).name('Rotation Y').onChange(onModelRotationChange);
+  transformFolder.add(guiParams, 'modelRotationZ', -Math.PI, Math.PI, 0.01).name('Rotation Z').onChange(onModelRotationChange);
+
+  const shimmerFolder = gui.addFolder('Shimmer Transform');
+  shimmerFolder.add(guiParams, 'shimmerOffsetX', -10, 10, 0.01).name('Offset X (Front/Back)');
+  shimmerFolder.add(guiParams, 'shimmerOffsetY', -10, 10, 0.01).name('Offset Y (Up/Down)');
+  shimmerFolder.add(guiParams, 'shimmerOffsetZ', 0, 10, 0.01).name('Offset Z (Spread)');
 
   // ── Panel show/hide helpers ─────────────────────────────────────────────────────
 
