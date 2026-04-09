@@ -70,7 +70,7 @@ export function createLightingRig({ scene, currentSetDef, getCurrentModelIndex, 
 
     for (let i = 0; i < config.count; i++) {
       const theta = Math.random() * Math.PI * 2;
-      const phi = Math.acos(THREE.MathUtils.lerp(-0.2, 1.0, Math.random()));
+      const phi = Math.acos(THREE.MathUtils.lerp(0.05, 1.0, Math.random()));
       const radius = THREE.MathUtils.lerp(config.radiusMin, config.radiusMax, Math.random());
       const sinPhi = Math.sin(phi);
 

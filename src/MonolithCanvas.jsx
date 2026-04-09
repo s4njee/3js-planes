@@ -50,7 +50,7 @@ const BOOST_SHAKE_Z_AMPLITUDE = 0.05;
 const BASE_SCENE_BACKGROUND = 0x050709;
 const SKY_DOME_RADIUS = 90;
 const CINEMATIC_EXPOSURE_MULTIPLIER = 0.58;
-const CLOUDS_ENABLED = true;
+const CLOUDS_ENABLED = false;
 const CLOUD_LAYER_COUNT = 5;
 const CLOUDS_PER_LAYER = 20;
 const CLOUD_SCROLL_SPEED = 9;
@@ -58,6 +58,10 @@ const CLOUD_FIELD_WIDTH = 95;
 const CLOUD_FIELD_DEPTH = 180;
 const CLOUD_FIELD_HEIGHT = 26;
 const CLOUD_AMBIENT_MIN_FACTOR = 0.58;
+const OCEAN_ENABLED = true;
+const OCEAN_Y = -8;
+const OCEAN_SIZE = 400;
+const GOD_RAYS_ENABLED = true;
 const TERRAIN_ENABLED = false;
 const ELEVATION_SPEED = 5.5;
 const ELEVATION_LERP_SPEED = 5.5;
@@ -94,7 +98,7 @@ const TERRAIN_GENERATOR_ARGS = Object.freeze({
   smoothLowerPlanes: 0.58,
   octaves: 7,
 });
-const TERRAIN_HEIGHT_STRENGTH = 6.2 * (1 - TERRAIN_GENERATOR_ARGS.smoothLowerPlanes * 0.5);
+const TERRAIN_HEIGHT_STRENGTH = 12.4 * (1 - TERRAIN_GENERATOR_ARGS.smoothLowerPlanes * 0.5);
 const TERRAIN_RIVER_WIDTH = THREE.MathUtils.mapLinear(TERRAIN_GENERATOR_ARGS.riverWidth, 0, 1, 0.5, 0.44);
 const TERRAIN_RIVER_FALLOFF = TERRAIN_GENERATOR_ARGS.riverFalloff * 0.3;
 
@@ -458,16 +462,16 @@ function createSkyDome() {
         vec3 dir = normalize(vDirection);
         float horizon = clamp((dir.y + 0.22) * 0.9, 0.0, 1.0);
 
-        vec3 zenith = vec3(0.015, 0.008, 0.07);
-        vec3 midSky = vec3(0.14, 0.04, 0.18);
-        vec3 horizonColor = vec3(0.42, 0.16, 0.14);
-        vec3 base = mix(horizonColor, midSky, smoothstep(0.0, 0.42, horizon));
+        vec3 zenith = vec3(0.02, 0.04, 0.14);
+        vec3 midSky = vec3(0.06, 0.10, 0.28);
+        vec3 horizonColor = vec3(0.85, 0.38, 0.10);
+        vec3 base = mix(horizonColor, midSky, smoothstep(0.0, 0.38, horizon));
         base = mix(base, zenith, smoothstep(0.35, 1.0, horizon));
 
         float sunsetBand = smoothstep(-0.22, 0.1, dir.y) * (1.0 - smoothstep(0.1, 0.34, dir.y));
-        base += vec3(0.34, 0.10, 0.08) * sunsetBand * 0.72;
-        base += vec3(0.24, 0.05, 0.16) * sunsetBand * 0.62;
-        base += vec3(0.38, 0.18, 0.10) * pow(sunsetBand, 1.6) * 0.4;
+        base += vec3(0.45, 0.18, 0.04) * sunsetBand * 0.7;
+        base += vec3(0.3, 0.08, 0.02) * sunsetBand * 0.5;
+        base += vec3(0.5, 0.25, 0.06) * pow(sunsetBand, 1.6) * 0.4;
 
         vec3 nebulaPos = vec3(
           dir.x * 2.8 + time * 0.015,
@@ -480,17 +484,66 @@ function createSkyDome() {
         float cloudLayer = smoothstep(0.42, 0.74, fbm(nebulaPos * 1.3 + vec3(4.2, -1.8, 2.7))) * smoothstep(-0.24, 0.38, dir.y);
         float highClouds = smoothstep(0.5, 0.76, fbm(nebulaPos * 2.4 + vec3(-6.0, 2.5, 1.2))) * smoothstep(0.08, 0.7, dir.y) * 0.55;
 
-        vec3 nebulaBlue = vec3(0.08, 0.08, 0.22);
-        vec3 nebulaPurple = vec3(0.36, 0.08, 0.28);
-        vec3 nebulaGlow = vec3(0.64, 0.22, 0.18);
-        vec3 cloudWarm = vec3(0.78, 0.30, 0.18);
-        vec3 cloudPink = vec3(0.62, 0.18, 0.28);
-        base += nebulaBlue * wisps * 0.16;
-        base += nebulaPurple * wisps * 0.46;
-        base += nebulaGlow * secondary * 0.34;
-        base += cloudWarm * cloudLayer * 0.24;
-        base += cloudPink * cloudLayer * 0.22;
-        base += vec3(0.42, 0.16, 0.24) * highClouds * 0.3;
+        vec3 nebulaBlue = vec3(0.06, 0.10, 0.28);
+        vec3 nebulaDeep = vec3(0.10, 0.12, 0.32);
+        vec3 nebulaGlow = vec3(0.7, 0.30, 0.08);
+        vec3 cloudWarm = vec3(0.85, 0.40, 0.10);
+        vec3 cloudAmber = vec3(0.7, 0.25, 0.06);
+        base += nebulaBlue * wisps * 0.2;
+        base += nebulaDeep * wisps * 0.35;
+        base += nebulaGlow * secondary * 0.3;
+        base += cloudWarm * cloudLayer * 0.22;
+        base += cloudAmber * cloudLayer * 0.18;
+        base += vec3(0.12, 0.16, 0.32) * highClouds * 0.25;
+
+        // ── Sun disc + glow ─────────────────────────────────────────
+        vec3 sunDir = normalize(vec3(-0.55, 0.06, -1.0));
+        float sunAngle = max(dot(dir, sunDir), 0.0);
+
+        // Bright core
+        float sunDisc = smoothstep(0.9985, 0.9995, sunAngle);
+        vec3 sunColor = vec3(1.0, 0.85, 0.5);
+        base += sunColor * sunDisc * 3.0;
+
+        // Soft glow halo
+        float sunGlow = pow(sunAngle, 48.0);
+        base += vec3(0.9, 0.4, 0.15) * sunGlow * 0.8;
+
+        // Wide warm wash
+        float sunWash = pow(sunAngle, 8.0);
+        base += vec3(0.5, 0.15, 0.06) * sunWash * 0.35;
+
+        // ── God rays (crepuscular rays) ─────────────────────────────
+        // Project direction onto a 2D plane perpendicular to the sun
+        // to create angular ray pattern
+        float cloudOcclusion = wisps + cloudLayer * 0.7 + highClouds * 0.5;
+
+        // Angular coordinate around sun direction for ray pattern
+        vec3 toSun = dir - sunDir * dot(dir, sunDir);
+        float rayAngle = atan(toSun.y, toSun.x);
+
+        // Multiple overlapping ray frequencies for natural look
+        float rays = 0.0;
+        rays += sin(rayAngle * 7.0 + time * 0.08) * 0.5 + 0.5;
+        rays *= sin(rayAngle * 13.0 - time * 0.05) * 0.3 + 0.7;
+        rays += (sin(rayAngle * 23.0 + time * 0.12) * 0.5 + 0.5) * 0.3;
+
+        // Noise-based variation so rays aren't perfectly uniform
+        float rayNoise = noise(vec3(rayAngle * 3.0, time * 0.1, 0.0));
+        rays *= 0.6 + rayNoise * 0.4;
+
+        // Rays only visible near the sun, fading with angular distance
+        float rayFalloff = pow(max(sunAngle, 0.0), 3.0);
+
+        // Cloud gaps modulate ray brightness
+        float rayOcclusion = 1.0 - cloudOcclusion * 0.7;
+        rayOcclusion = max(rayOcclusion, 0.3);
+
+        // Rays visible mainly near and below horizon
+        float rayHeightMask = smoothstep(0.5, 0.0, dir.y) * smoothstep(-0.4, -0.1, dir.y);
+
+        vec3 rayColor = vec3(0.7, 0.35, 0.15);
+        base += rayColor * rays * rayFalloff * rayOcclusion * rayHeightMask * 0.2;
 
         float vignette = 1.0 - smoothstep(0.15, 1.0, length(dir.xz) * 0.85);
         base += vec3(0.07, 0.025, 0.09) * vignette * 0.28;
@@ -588,6 +641,143 @@ function createCloudField() {
 
   group.userData.texture = texture;
   return group;
+}
+
+function createOcean() {
+  const geometry = new THREE.PlaneGeometry(OCEAN_SIZE, OCEAN_SIZE, 1, 1);
+  geometry.rotateX(-Math.PI / 2);
+
+  const material = new THREE.ShaderMaterial({
+    transparent: true,
+    depthWrite: true,
+    uniforms: {
+      time: { value: 0 },
+      scrollOffset: { value: 0 },
+      cameraPos: { value: new THREE.Vector3() },
+    },
+    vertexShader: `
+      varying vec3 vWorldPos;
+      varying vec2 vUv;
+
+      void main() {
+        vUv = uv;
+        vec4 worldPos = modelMatrix * vec4(position, 1.0);
+        vWorldPos = worldPos.xyz;
+        gl_Position = projectionMatrix * viewMatrix * worldPos;
+      }
+    `,
+    fragmentShader: `
+      uniform float time;
+      uniform float scrollOffset;
+      uniform vec3 cameraPos;
+      varying vec3 vWorldPos;
+      varying vec2 vUv;
+
+      float hash(vec2 p) {
+        return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453123);
+      }
+
+      float noise(vec2 p) {
+        vec2 i = floor(p);
+        vec2 f = fract(p);
+        f = f * f * (3.0 - 2.0 * f);
+        float a = hash(i);
+        float b = hash(i + vec2(1.0, 0.0));
+        float c = hash(i + vec2(0.0, 1.0));
+        float d = hash(i + vec2(1.0, 1.0));
+        return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
+      }
+
+      void main() {
+        vec3 viewDir = normalize(cameraPos - vWorldPos);
+        float dist = length(cameraPos.xz - vWorldPos.xz);
+
+        // Wave normals from scrolling noise — scroll with flight speed
+        vec2 flight = vec2(0.0, -scrollOffset * 0.04);
+        vec2 uv1 = vWorldPos.xz * 0.04 + vec2(time * 0.02, time * 0.015) + flight;
+        vec2 uv2 = vWorldPos.xz * 0.08 + vec2(-time * 0.015, time * 0.01) + flight * 2.0;
+
+        // Two noise layers instead of three FBM calls
+        float n1 = noise(uv1) * 0.6 + noise(uv1 * 2.1) * 0.3;
+        float n2 = noise(uv2) * 0.4 + noise(uv2 * 1.9) * 0.2;
+        float waves = n1 + n2;
+
+        // Analytical normal from noise derivatives via finite offset on cheap single-octave noise
+        float eps = 0.15;
+        float hC = noise(uv1) + noise(uv2) * 0.5;
+        float hR = noise(uv1 + vec2(eps, 0.0)) + noise(uv2 + vec2(eps, 0.0)) * 0.5;
+        float hU = noise(uv1 + vec2(0.0, eps)) + noise(uv2 + vec2(0.0, eps)) * 0.5;
+        vec3 waveNormal = normalize(vec3(hC - hR, eps * 4.0, hC - hU));
+
+        // Fresnel - stronger reflection at grazing angles
+        float fresnel = pow(1.0 - max(dot(viewDir, waveNormal), 0.0), 2.5);
+        fresnel = mix(0.25, 1.0, fresnel);
+
+        // Sun direction (low on horizon, matching sunset)
+        vec3 sunDir = normalize(vec3(-0.55, 0.08, -1.0));
+
+        // Specular highlight from sun
+        vec3 halfDir = normalize(viewDir + sunDir);
+        float spec = pow(max(dot(waveNormal, halfDir), 0.0), 256.0);
+        float specBroad = pow(max(dot(waveNormal, halfDir), 0.0), 24.0);
+
+        // Sky reflection colors (matching blue-orange sky dome)
+        vec3 zenithColor = vec3(0.01, 0.04, 0.22);
+        vec3 horizonColor = vec3(0.85, 0.38, 0.10);
+        vec3 sunsetWarm = vec3(0.8, 0.35, 0.08);
+        vec3 sunsetGlow = vec3(0.95, 0.45, 0.12);
+
+        // Reflection based on view angle
+        float reflAngle = max(dot(viewDir, vec3(0.0, 1.0, 0.0)), 0.0);
+
+        // Bias warm reflection toward the sun direction
+        vec3 flatViewDir = normalize(vec3(viewDir.x, 0.0, viewDir.z));
+        vec3 flatSunDir = normalize(vec3(sunDir.x, 0.0, sunDir.z));
+        float sunAlignment = max(dot(flatViewDir, flatSunDir), 0.0);
+        float sunReflWeight = pow(sunAlignment, 1.8);
+
+        // Away from sun: deep indigo tones
+        vec3 coolReflect = mix(vec3(0.02, 0.06, 0.22), zenithColor, smoothstep(0.0, 0.4, reflAngle));
+        vec3 warmReflect = mix(sunsetWarm, horizonColor * 0.8, smoothstep(0.0, 0.2, reflAngle));
+        warmReflect = mix(warmReflect, zenithColor, smoothstep(0.2, 0.6, reflAngle));
+        vec3 skyReflect = mix(coolReflect, warmReflect, sunReflWeight);
+
+        // Wave shimmer
+        skyReflect += vec3(0.1, 0.06, 0.03) * waves;
+
+        // Deep water base — rich indigo
+        vec3 deepColor = vec3(0.01, 0.03, 0.12);
+
+        // Combine reflection and depth
+        vec3 color = mix(deepColor, skyReflect, fresnel);
+
+        // Specular highlights — sun-facing gets bright, broad glow everywhere
+        color += sunsetGlow * spec * 3.0;
+        color += vec3(0.5, 0.2, 0.1) * specBroad * 0.12 * sunReflWeight;
+        color += vec3(0.02, 0.04, 0.14) * specBroad * 0.06; // navy glint
+
+        // Subtle caustic shimmer
+        float caustic = pow(waves, 2.0) * 0.06;
+        color += vec3(0.15, 0.12, 0.08) * caustic;
+
+        // Distance fade to horizon
+        float distFade = smoothstep(0.0, OCEAN_SIZE_F * 0.4, dist);
+        color = mix(color, horizonColor * 0.35 + vec3(0.02, 0.04, 0.12), distFade * 0.6);
+
+        // Opacity: solid near camera, transparent at edges
+        float alpha = 1.0 - smoothstep(OCEAN_SIZE_F * 0.35, OCEAN_SIZE_F * 0.5, dist);
+        alpha = max(alpha, 0.35 * (1.0 - distFade));
+
+        gl_FragColor = vec4(color, alpha * 0.95);
+      }
+    `.replace(/OCEAN_SIZE_F/g, OCEAN_SIZE.toFixed(1)),
+  });
+
+  const mesh = new THREE.Mesh(geometry, material);
+  mesh.position.y = OCEAN_Y;
+  mesh.renderOrder = -50;
+  mesh.frustumCulled = false;
+  return mesh;
 }
 
 function mapMonolithBloomSettings(guiParams) {
@@ -701,6 +891,7 @@ function MonolithScene() {
   const heatShimmerRef = useRef(null);
   const heatShimmerMaterialRef = useRef(null);
   const skyDomeRef = useRef(null);
+  const oceanRef = useRef(null);
   const cloudFieldRef = useRef(null);
   const cloudStateRef = useRef({
     density: 0,
@@ -836,6 +1027,9 @@ function MonolithScene() {
     }
     if (cloudFieldRef.current) {
       cloudFieldRef.current.visible = !effectiveWhiteMode && CLOUDS_ENABLED;
+    }
+    if (oceanRef.current) {
+      oceanRef.current.visible = !effectiveWhiteMode && OCEAN_ENABLED;
     }
     overlaysRef.current?.applyWhiteMode(effectiveWhiteMode);
     uiRef.current?.applyWhiteMode();
@@ -1232,8 +1426,8 @@ function MonolithScene() {
 
     camera.fov = BASE_CAMERA_FOV;
     camera.near = 0.1;
-    camera.far = 100;
-    camera.position.set(0, 2.5, 14);
+    camera.far = 250;
+    camera.position.set(0, 5.0, 14);
     camera.updateProjectionMatrix();
 
     gl.setPixelRatio(window.devicePixelRatio);
@@ -1247,7 +1441,7 @@ function MonolithScene() {
     gl.domElement.style.opacity = '0';
 
     const controls = new OrbitControls(camera, gl.domElement);
-    controls.target.set(0, 2.5, 0);
+    controls.target.set(0, 5.0, 0);
     controls.enableDamping = true;
     controls.update();
     controlsRef.current = controls;
@@ -1413,6 +1607,12 @@ function MonolithScene() {
       const cloudField = createCloudField();
       scene.add(cloudField);
       cloudFieldRef.current = cloudField;
+    }
+
+    if (OCEAN_ENABLED) {
+      const ocean = createOcean();
+      scene.add(ocean);
+      oceanRef.current = ocean;
     }
 
     if (TERRAIN_ENABLED) {
@@ -1689,6 +1889,11 @@ function MonolithScene() {
         skyDomeRef.current.geometry.dispose();
         skyDomeRef.current.material.dispose();
       }
+      if (oceanRef.current) {
+        scene.remove(oceanRef.current);
+        oceanRef.current.geometry.dispose();
+        oceanRef.current.material.dispose();
+      }
       if (cloudFieldRef.current) {
         scene.remove(cloudFieldRef.current);
         cloudFieldRef.current.traverse((child) => {
@@ -1797,6 +2002,13 @@ function MonolithScene() {
     if (skyDomeRef.current) {
       skyDomeRef.current.position.copy(camera.position);
       skyDomeRef.current.material.uniforms.time.value = elapsed;
+    }
+
+    if (OCEAN_ENABLED && oceanRef.current) {
+      const oceanSpeed = CLOUD_SCROLL_SPEED * (1 + boostVisualState.intensity * 1.8);
+      oceanRef.current.material.uniforms.scrollOffset.value += oceanSpeed * delta;
+      oceanRef.current.material.uniforms.time.value = elapsed;
+      oceanRef.current.material.uniforms.cameraPos.value.copy(camera.position);
     }
 
     if (CLOUDS_ENABLED && cloudFieldRef.current) {
