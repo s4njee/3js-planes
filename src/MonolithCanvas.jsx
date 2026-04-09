@@ -47,6 +47,282 @@ const BOOST_SHAKE_LERP_SPEED = 8;
 const BOOST_SHAKE_X_AMPLITUDE = 0.035;
 const BOOST_SHAKE_Y_AMPLITUDE = 0.025;
 const BOOST_SHAKE_Z_AMPLITUDE = 0.05;
+const BASE_SCENE_BACKGROUND = 0x050709;
+const SKY_DOME_RADIUS = 90;
+const ELEVATION_SPEED = 5.5;
+const ELEVATION_LERP_SPEED = 5.5;
+const ELEVATION_MIN_OFFSET = -3.5;
+const ELEVATION_MAX_OFFSET = 5.5;
+const ELEVATION_PITCH_MAX = 0.2;
+const ELEVATION_PITCH_LERP_SPEED = 6.5;
+const TERRAIN_TILE_COUNT = 3;
+const TERRAIN_TILE_LENGTH = 180;
+const TERRAIN_TILE_OVERLAP = 20;
+const TERRAIN_SCROLL_SPEED = 24;
+const TERRAIN_BASE_Y = -19.5;
+const TERRAIN_WIDTH = 220;
+const TERRAIN_TREE_COUNT = 180;
+const TERRAIN_TREE_ATTEMPT_MULTIPLIER = 10;
+
+function getTerrainHeight(x, worldZ) {
+  const broadHills =
+    Math.sin(x * 0.018) * 4.1 +
+    Math.cos(worldZ * 0.015) * 3.2 +
+    Math.sin((x * 0.032) + (worldZ * 0.022)) * 2.4;
+  const rollingDetail =
+    Math.sin((x * 0.082) - (worldZ * 0.051)) * 1.25 +
+    Math.cos((x * 0.055) + (worldZ * 0.09)) * 0.8;
+  const valley = -Math.exp(-Math.pow(x / 15.0, 2.0)) * 2.2;
+  return broadHills + rollingDetail + valley - 1.8;
+}
+
+function getTerrainBiome(x, worldZ, height) {
+  const moisture =
+    0.62 +
+    (Math.sin((x + 40) * 0.02) * 0.22) +
+    (Math.cos((worldZ - 12) * 0.03) * 0.2) +
+    (Math.sin((x * 0.06) + (worldZ * 0.045)) * 0.14);
+  const fertility = moisture - (Math.max(height, 0) * 0.022);
+  return {
+    fertility,
+    moisture,
+  };
+}
+
+function getTerrainNormal(x, worldZ) {
+  const sampleOffset = 0.8;
+  const slopeX = getTerrainHeight(x + sampleOffset, worldZ) - getTerrainHeight(x - sampleOffset, worldZ);
+  const slopeZ = getTerrainHeight(x, worldZ + sampleOffset) - getTerrainHeight(x, worldZ - sampleOffset);
+  return new THREE.Vector3(-slopeX, sampleOffset * 2, -slopeZ).normalize();
+}
+
+function disposeTerrainTileContents(tileGroup) {
+  tileGroup.traverse((child) => {
+    if (!child.isMesh) return;
+    child.geometry.dispose();
+    child.material.dispose();
+  });
+  tileGroup.clear();
+}
+
+function populateTerrainTile(tileGroup, zOffset) {
+  const length = TERRAIN_TILE_LENGTH + TERRAIN_TILE_OVERLAP;
+  const widthSegments = 28;
+  const lengthSegments = 28;
+  const geometry = new THREE.PlaneGeometry(TERRAIN_WIDTH, length, widthSegments, lengthSegments);
+  geometry.rotateX(-Math.PI / 2);
+
+  const positions = geometry.attributes.position;
+  const normals = new Float32Array(positions.count * 3);
+  const colors = new Float32Array(positions.count * 3);
+  const color = new THREE.Color();
+  const vertexNormal = new THREE.Vector3();
+
+  for (let i = 0; i < positions.count; i++) {
+    const x = positions.getX(i);
+    const z = positions.getZ(i);
+    const worldZ = z + zOffset;
+    const height = getTerrainHeight(x, worldZ);
+    positions.setY(i, height);
+    vertexNormal.copy(getTerrainNormal(x, worldZ));
+    normals[i * 3] = vertexNormal.x;
+    normals[i * 3 + 1] = vertexNormal.y;
+    normals[i * 3 + 2] = vertexNormal.z;
+
+    const { fertility, moisture } = getTerrainBiome(x, worldZ, height);
+    const hue = THREE.MathUtils.clamp(0.29 + (fertility * 0.028) - (height * 0.002), 0.27, 0.35);
+    const saturation = THREE.MathUtils.clamp(0.24 + (moisture * 0.18), 0.2, 0.4);
+    const lightness = THREE.MathUtils.clamp(0.1 + ((height + 6.5) / 42) + (fertility * 0.018), 0.08, 0.22);
+    color.setHSL(hue, saturation, lightness);
+    colors[i * 3] = color.r;
+    colors[i * 3 + 1] = color.g;
+    colors[i * 3 + 2] = color.b;
+  }
+
+  geometry.setAttribute('normal', new THREE.BufferAttribute(normals, 3));
+  geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+
+  const material = new THREE.MeshBasicMaterial({
+    vertexColors: true,
+    transparent: true,
+    opacity: 0.98,
+    side: THREE.DoubleSide,
+  });
+
+  const mesh = new THREE.Mesh(geometry, material);
+  tileGroup.add(mesh);
+
+  const trunkGeometry = new THREE.CylinderGeometry(0.12, 0.18, 1.3, 6);
+  const trunkMaterial = new THREE.MeshBasicMaterial({ color: 0x2b2119 });
+  const trunkMesh = new THREE.InstancedMesh(trunkGeometry, trunkMaterial, TERRAIN_TREE_COUNT);
+  const canopyGeometry = new THREE.ConeGeometry(0.7, 2.5, 8);
+  const canopyMaterial = new THREE.MeshBasicMaterial({ color: 0x152a18 });
+  const canopyMesh = new THREE.InstancedMesh(canopyGeometry, canopyMaterial, TERRAIN_TREE_COUNT);
+  const matrix = new THREE.Matrix4();
+  const position = new THREE.Vector3();
+  const quaternion = new THREE.Quaternion();
+  const scale = new THREE.Vector3();
+  const upAxis = new THREE.Vector3(0, 1, 0);
+  const normal = new THREE.Vector3();
+  const tangent = new THREE.Vector3();
+  const bitangent = new THREE.Vector3();
+
+  let plantedTrees = 0;
+  let attempts = 0;
+  while (plantedTrees < TERRAIN_TREE_COUNT && attempts < TERRAIN_TREE_COUNT * TERRAIN_TREE_ATTEMPT_MULTIPLIER) {
+    attempts += 1;
+    const x = (Math.random() - 0.5) * (TERRAIN_WIDTH - 14);
+    const z = (Math.random() - 0.5) * (length - 10);
+    const worldZ = z + zOffset;
+    const height = getTerrainHeight(x, worldZ);
+    const { fertility } = getTerrainBiome(x, worldZ, height);
+
+    const slopeX = getTerrainHeight(x + 0.8, worldZ) - getTerrainHeight(x - 0.8, worldZ);
+    const slopeZ = getTerrainHeight(x, worldZ + 0.8) - getTerrainHeight(x, worldZ - 0.8);
+    const slope = Math.hypot(slopeX, slopeZ);
+    const inRiver = Math.abs(x) < 11 && fertility < 0.56;
+
+    if (fertility < 0.5 || slope > 1.15 || inRiver || height < -4.9) {
+      continue;
+    }
+
+    normal.set(-slopeX, 1.8, -slopeZ).normalize();
+    tangent.set(1, slopeX, 0).normalize();
+    bitangent.crossVectors(normal, tangent).normalize();
+    tangent.crossVectors(bitangent, normal).normalize();
+    matrix.makeBasis(tangent, normal, bitangent);
+    quaternion.setFromRotationMatrix(matrix);
+
+    const trunkHeight = 1.1 + Math.random() * 1.2;
+    const canopyHeight = 2.1 + Math.random() * 2.3;
+    const canopyRadius = 0.45 + Math.random() * 0.26;
+
+    position.set(x, height + (trunkHeight * 0.5), z);
+    scale.set(0.7, trunkHeight / 1.3, 0.7);
+    matrix.compose(position, quaternion, scale);
+    trunkMesh.setMatrixAt(plantedTrees, matrix);
+
+    position.set(x, height + trunkHeight + (canopyHeight * 0.44), z);
+    scale.set(canopyRadius, canopyHeight / 1.9, canopyRadius);
+    matrix.compose(position, quaternion, scale);
+    canopyMesh.setMatrixAt(plantedTrees, matrix);
+
+    plantedTrees += 1;
+  }
+
+  trunkMesh.count = plantedTrees;
+  canopyMesh.count = plantedTrees;
+  trunkMesh.instanceMatrix.needsUpdate = true;
+  canopyMesh.instanceMatrix.needsUpdate = true;
+  tileGroup.add(trunkMesh);
+  tileGroup.add(canopyMesh);
+
+  tileGroup.position.set(0, TERRAIN_BASE_Y, zOffset);
+}
+
+function createTerrainTile({ zOffset }) {
+  const tileGroup = new THREE.Group();
+  populateTerrainTile(tileGroup, zOffset);
+  return tileGroup;
+}
+
+function createSkyDome() {
+  const geometry = new THREE.SphereGeometry(SKY_DOME_RADIUS, 48, 32);
+  const material = new THREE.ShaderMaterial({
+    side: THREE.BackSide,
+    depthWrite: false,
+    uniforms: {
+      time: { value: 0 },
+    },
+    vertexShader: `
+      varying vec3 vDirection;
+
+      void main() {
+        vDirection = normalize(position);
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+      }
+    `,
+    fragmentShader: `
+      uniform float time;
+      varying vec3 vDirection;
+
+      float hash(vec3 p) {
+        return fract(sin(dot(p, vec3(127.1, 311.7, 74.7))) * 43758.5453123);
+      }
+
+      float noise(vec3 p) {
+        vec3 i = floor(p);
+        vec3 f = fract(p);
+        f = f * f * (3.0 - 2.0 * f);
+
+        float n000 = hash(i + vec3(0.0, 0.0, 0.0));
+        float n100 = hash(i + vec3(1.0, 0.0, 0.0));
+        float n010 = hash(i + vec3(0.0, 1.0, 0.0));
+        float n110 = hash(i + vec3(1.0, 1.0, 0.0));
+        float n001 = hash(i + vec3(0.0, 0.0, 1.0));
+        float n101 = hash(i + vec3(1.0, 0.0, 1.0));
+        float n011 = hash(i + vec3(0.0, 1.0, 1.0));
+        float n111 = hash(i + vec3(1.0, 1.0, 1.0));
+
+        float nx00 = mix(n000, n100, f.x);
+        float nx10 = mix(n010, n110, f.x);
+        float nx01 = mix(n001, n101, f.x);
+        float nx11 = mix(n011, n111, f.x);
+        float nxy0 = mix(nx00, nx10, f.y);
+        float nxy1 = mix(nx01, nx11, f.y);
+        return mix(nxy0, nxy1, f.z);
+      }
+
+      float fbm(vec3 p) {
+        float value = 0.0;
+        float amplitude = 0.5;
+        for (int i = 0; i < 5; i += 1) {
+          value += noise(p) * amplitude;
+          p *= 2.0;
+          amplitude *= 0.5;
+        }
+        return value;
+      }
+
+      void main() {
+        vec3 dir = normalize(vDirection);
+        float horizon = clamp((dir.y + 0.22) * 0.9, 0.0, 1.0);
+
+        vec3 zenith = vec3(0.05, 0.02, 0.24);
+        vec3 midSky = vec3(0.08, 0.12, 0.42);
+        vec3 horizonColor = vec3(0.10, 0.22, 0.56);
+        vec3 base = mix(horizonColor, midSky, smoothstep(0.0, 0.42, horizon));
+        base = mix(base, zenith, smoothstep(0.35, 1.0, horizon));
+
+        vec3 nebulaPos = vec3(
+          dir.x * 2.8 + time * 0.015,
+          dir.y * 1.8 - time * 0.01,
+          dir.z * 2.8
+        );
+        float nebula = fbm(nebulaPos);
+        float wisps = smoothstep(0.5, 0.82, nebula) * smoothstep(-0.15, 0.75, dir.y);
+        float secondary = smoothstep(0.58, 0.9, fbm(nebulaPos * 1.9 + 7.3)) * 0.6;
+
+        vec3 nebulaBlue = vec3(0.20, 0.34, 0.88);
+        vec3 nebulaPurple = vec3(0.36, 0.14, 0.72);
+        vec3 nebulaGlow = vec3(0.56, 0.48, 1.0);
+        base += nebulaBlue * wisps * 0.55;
+        base += nebulaPurple * wisps * 0.32;
+        base += nebulaGlow * secondary * 0.3;
+
+        float vignette = 1.0 - smoothstep(0.15, 1.0, length(dir.xz) * 0.85);
+        base += vec3(0.08, 0.10, 0.24) * vignette * 0.18;
+
+        gl_FragColor = vec4(base, 1.0);
+      }
+    `,
+  });
+
+  const mesh = new THREE.Mesh(geometry, material);
+  mesh.renderOrder = -100;
+  mesh.frustumCulled = false;
+  return mesh;
+}
 
 function mapMonolithBloomSettings(guiParams) {
   // Monolith's legacy sliders were tuned for UnrealBloomPass. Translate them
@@ -95,13 +371,14 @@ function canTriggerMonolithGlitch(state) {
 
 function createMonolithEffectSnapshot(guiParams, state, glitchTriggerToken) {
   const bloom = mapMonolithBloomSettings(guiParams);
+  const cinematicEnabled = state.currentFx === SHARED_FX_CINEMATIC;
 
   return {
     barrelBlurAmount: guiParams.barrelBlurAmount,
     barrelBlurEnabled: guiParams.barrelBlurEnabled,
     barrelBlurOffsetX: guiParams.barrelBlurOffsetX,
     barrelBlurOffsetY: guiParams.barrelBlurOffsetY,
-    bloomEnabled: guiParams.bloomEnabled,
+    bloomEnabled: guiParams.bloomEnabled && !cinematicEnabled,
     bloomIntensity: bloom.intensity,
     bloomRadius: bloom.radius,
     bloomSmoothing: bloom.smoothing,
@@ -112,7 +389,7 @@ function createMonolithEffectSnapshot(guiParams, state, glitchTriggerToken) {
     chromaticOffsetY: guiParams.chromaticAberrationOffsetY,
     chromaticOscillationSpeed: CHROMATIC_OSCILLATION_SPEED,
     chromaticRadialModulation: guiParams.chromaticAberrationRadialModulation,
-    cinematicEnabled: state.currentFx === SHARED_FX_CINEMATIC,
+    cinematicEnabled,
     databendEnabled: state.currentFx === SHARED_FX_DATABEND,
     glitchDuration: guiParams.glitchDuration,
     glitchEnabled: canTriggerMonolithGlitch(state),
@@ -154,8 +431,18 @@ function MonolithScene() {
   const modelCacheRef = useRef(new Map()); // session cache keyed by model path; see TODO in root ToDo.md #6
   const mixerRef = useRef(null);
   const monolithRef = useRef(new THREE.Group());
+  const monolithBasePositionRef = useRef(new THREE.Vector3());
   const heatShimmerRef = useRef(null);
   const heatShimmerMaterialRef = useRef(null);
+  const skyDomeRef = useRef(null);
+  const terrainTilesRef = useRef([]);
+  const flightControlRef = useRef({
+    ascendPressed: false,
+    descendPressed: false,
+    elevationOffset: 0,
+    targetElevationOffset: 0,
+    pitchOffset: 0,
+  });
   const stateRef = useRef(createInitialMonolithState());
   const boostVisualStateRef = useRef({
     intensity: 0,
@@ -268,11 +555,14 @@ function MonolithScene() {
   const applySceneAppearance = () => {
     const effectiveWhiteMode = getEffectiveWhiteMode();
 
-    document.body.style.background = effectiveWhiteMode ? 'white' : '#111111';
+    document.body.style.background = effectiveWhiteMode ? 'white' : '#050709';
     scene.environment = null;
     scene.background = currentSetDef().nullBackground
       ? null
-      : new THREE.Color(effectiveWhiteMode ? 0xffffff : 0x111111);
+      : new THREE.Color(effectiveWhiteMode ? 0xffffff : BASE_SCENE_BACKGROUND);
+    if (skyDomeRef.current) {
+      skyDomeRef.current.visible = !effectiveWhiteMode;
+    }
     overlaysRef.current?.applyWhiteMode(effectiveWhiteMode);
     uiRef.current?.applyWhiteMode();
   };
@@ -330,6 +620,18 @@ function MonolithScene() {
       : 1;
   };
 
+  const applyMonolithTransform = () => {
+    if (!monolithRef.current) return;
+
+    monolithRef.current.position.copy(monolithBasePositionRef.current);
+    monolithRef.current.position.y += flightControlRef.current.elevationOffset;
+    monolithRef.current.rotation.set(
+      guiParamsRef.current.modelRotationX,
+      guiParamsRef.current.modelRotationY,
+      guiParamsRef.current.modelRotationZ + flightControlRef.current.pitchOffset,
+    );
+  };
+
   const swapModel = (model, name, animations) => {
     if (mixerRef.current) {
       mixerRef.current.stopAllAction();
@@ -337,12 +639,12 @@ function MonolithScene() {
     }
 
     scene.remove(monolithRef.current);
-    model.rotation.set(
-      guiParamsRef.current.modelRotationX,
-      guiParamsRef.current.modelRotationY,
-      guiParamsRef.current.modelRotationZ
-    );
+    const basePosition = model.userData.monolithBasePosition instanceof THREE.Vector3
+      ? model.userData.monolithBasePosition
+      : model.position.clone();
+    monolithBasePositionRef.current.copy(basePosition);
     monolithRef.current = model;
+    applyMonolithTransform();
     scene.add(monolithRef.current);
 
     if (animations?.length > 0) {
@@ -523,6 +825,9 @@ function MonolithScene() {
             const animations = gltf.animations;
 
             materialManagerRef.current?.normalizeModelTransform(model, def, index);
+            if (!(model.userData.monolithBasePosition instanceof THREE.Vector3)) {
+              model.userData.monolithBasePosition = model.position.clone();
+            }
             materialManagerRef.current?.applyModelTextureFiltering(model);
             materialManagerRef.current?.applyModelMaterials(
               model,
@@ -648,8 +953,8 @@ function MonolithScene() {
   // ── Setup effect (mount / unmount) ───────────────────────────────────────────────
 
   useEffect(() => {
-    scene.background = new THREE.Color(0x111111);
-    document.body.style.background = '#111111';
+    scene.background = new THREE.Color(BASE_SCENE_BACKGROUND);
+    document.body.style.background = '#050709';
 
     camera.fov = BASE_CAMERA_FOV;
     camera.near = 0.1;
@@ -659,7 +964,7 @@ function MonolithScene() {
 
     gl.setPixelRatio(window.devicePixelRatio);
     gl.toneMapping = THREE.ACESFilmicToneMapping;
-    gl.toneMappingExposure = 1.4;
+    gl.toneMappingExposure = 1.1;
     gl.domElement.style.position = 'relative';
     gl.domElement.style.zIndex = '1';
     gl.domElement.style.touchAction = 'none';
@@ -826,6 +1131,16 @@ function MonolithScene() {
 
     scene.add(monolithRef.current);
 
+    const skyDome = createSkyDome();
+    scene.add(skyDome);
+    skyDomeRef.current = skyDome;
+
+    const terrainTiles = Array.from({ length: TERRAIN_TILE_COUNT }, (_, index) => (
+      createTerrainTile({ zOffset: -index * TERRAIN_TILE_LENGTH })
+    ));
+    terrainTiles.forEach((tile) => scene.add(tile));
+    terrainTilesRef.current = terrainTiles;
+
     // Create heat shimmer mesh behind the monolith
     const shimmerGroup = new THREE.Group();
     shimmerGroup.visible = false;
@@ -962,13 +1277,7 @@ function MonolithScene() {
       onEffectSettingsChange: syncEffectSnapshot,
       onTriggerGlitch: () => syncEffectSnapshot({ triggerGlitch: true }),
       onModelRotationChange: () => {
-        if (monolithRef.current) {
-          monolithRef.current.rotation.set(
-            guiParamsRef.current.modelRotationX,
-            guiParamsRef.current.modelRotationY,
-            guiParamsRef.current.modelRotationZ
-          );
-        }
+        applyMonolithTransform();
       },
     });
 
@@ -1020,6 +1329,16 @@ function MonolithScene() {
         return;
       }
 
+      if (event.key === 'ArrowUp' || event.key === 'ArrowDown') {
+        event.preventDefault();
+        if (event.key === 'ArrowUp') {
+          flightControlRef.current.ascendPressed = true;
+        } else {
+          flightControlRef.current.descendPressed = true;
+        }
+        return;
+      }
+
       if (event.key === '6') {
         toggleWhiteMode();
         return;
@@ -1036,8 +1355,19 @@ function MonolithScene() {
     };
 
     const onKeyUp = (event) => {
-      if (event.code !== 'Space' || !supportsAnimationSpeedBoost()) return;
-      setAnimationSpeedBoost(false);
+      if (event.code === 'Space' && supportsAnimationSpeedBoost()) {
+        setAnimationSpeedBoost(false);
+        return;
+      }
+
+      if (event.key === 'ArrowUp') {
+        flightControlRef.current.ascendPressed = false;
+        return;
+      }
+
+      if (event.key === 'ArrowDown') {
+        flightControlRef.current.descendPressed = false;
+      }
     };
 
     window.addEventListener('keydown', onKeyDown);
@@ -1068,6 +1398,16 @@ function MonolithScene() {
       overlaysRef.current?.destroy();
       progressContainer.remove();
       scene.remove(monolithRef.current);
+      if (skyDomeRef.current) {
+        scene.remove(skyDomeRef.current);
+        skyDomeRef.current.geometry.dispose();
+        skyDomeRef.current.material.dispose();
+      }
+      terrainTilesRef.current.forEach((tile) => {
+        scene.remove(tile);
+        disposeTerrainTileContents(tile);
+      });
+      terrainTilesRef.current = [];
       if (heatShimmerRef.current) {
         scene.remove(heatShimmerRef.current);
         heatShimmerRef.current.children.forEach((child) => {
@@ -1075,6 +1415,8 @@ function MonolithScene() {
         });
       }
       heatShimmerMaterialRef.current?.dispose();
+      lightingRigRef.current?.dispose?.();
+      lightingRigRef.current = null;
       scene.environment = null;
       scene.background = null;
       dracoLoader.dispose();
@@ -1100,12 +1442,36 @@ function MonolithScene() {
     controlsRef.current?.update();
     mixerRef.current?.update(delta);
     materialManagerRef.current?.updateXrayAnimation(elapsed);
+    lightingRigRef.current?.updateBackgroundStars({
+      cameraPosition: camera.position,
+    });
 
     boostVisualState.intensity = THREE.MathUtils.lerp(
       boostVisualState.intensity,
       boostTarget,
       delta * BOOST_SHAKE_LERP_SPEED,
     );
+
+    const flightControl = flightControlRef.current;
+    const elevationDirection = Number(flightControl.ascendPressed) - Number(flightControl.descendPressed);
+    if (elevationDirection !== 0) {
+      flightControl.targetElevationOffset = THREE.MathUtils.clamp(
+        flightControl.targetElevationOffset + (elevationDirection * ELEVATION_SPEED * delta),
+        ELEVATION_MIN_OFFSET,
+        ELEVATION_MAX_OFFSET,
+      );
+    }
+    flightControl.elevationOffset = THREE.MathUtils.lerp(
+      flightControl.elevationOffset,
+      flightControl.targetElevationOffset,
+      delta * ELEVATION_LERP_SPEED,
+    );
+    flightControl.pitchOffset = THREE.MathUtils.lerp(
+      flightControl.pitchOffset,
+      -elevationDirection * ELEVATION_PITCH_MAX,
+      delta * ELEVATION_PITCH_LERP_SPEED,
+    );
+    applyMonolithTransform();
 
     const targetFov = THREE.MathUtils.lerp(
       BASE_CAMERA_FOV,
@@ -1122,6 +1488,31 @@ function MonolithScene() {
         (Math.sin(elapsed * 19.0 + 0.3) + Math.sin(elapsed * 47.0 + 2.4)) * BOOST_SHAKE_Z_AMPLITUDE * boostVisualState.intensity,
       );
       camera.position.add(boostShakeOffset);
+    }
+
+    if (skyDomeRef.current) {
+      skyDomeRef.current.position.copy(camera.position);
+      skyDomeRef.current.material.uniforms.time.value = elapsed;
+    }
+
+    if (terrainTilesRef.current.length > 0) {
+      const scrollSpeed = TERRAIN_SCROLL_SPEED * (1 + boostVisualState.intensity * 2.6);
+      const wrapThreshold = TERRAIN_TILE_LENGTH * 0.75;
+      let furthestBackZ = Infinity;
+
+      terrainTilesRef.current.forEach((tile) => {
+        furthestBackZ = Math.min(furthestBackZ, tile.position.z);
+      });
+
+      terrainTilesRef.current.forEach((tile) => {
+        tile.position.z += scrollSpeed * delta;
+        if (tile.position.z > wrapThreshold) {
+          const nextZOffset = furthestBackZ - TERRAIN_TILE_LENGTH;
+          disposeTerrainTileContents(tile);
+          populateTerrainTile(tile, nextZOffset);
+          furthestBackZ = nextZOffset;
+        }
+      });
     }
 
     if (heatShimmerRef.current && heatShimmerRef.current.children.length > 0) {
@@ -1178,7 +1569,7 @@ function MonolithScene() {
 }
 
 export default function MonolithCanvas() {
-  const dpr = useMemo(() => [1, Math.min(window.devicePixelRatio, 2)], []);
+  const dpr = useMemo(() => Math.min(window.devicePixelRatio, 2), []);
 
   return (
     <SafeCanvas

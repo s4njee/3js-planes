@@ -17,6 +17,7 @@ export const MODEL_SET_DEF = {
       key: '2',
       name: 'Apache',
       path: '/set3/Meshy_AI_Apache_0405134217_texture.glb',
+      engineShimmers: [],
     },
     {
       key: '3',
@@ -59,6 +60,7 @@ export const MODEL_SET_DEF = {
       key: '0',
       name: 'Black Hawk',
       path: '/set3/Meshy_AI_blackhawk_0405135622_texture.glb',
+      engineShimmers: [],
     },
   ],
   defaultModel: 0,

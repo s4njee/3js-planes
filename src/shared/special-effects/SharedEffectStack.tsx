@@ -104,6 +104,10 @@ export default function SharedEffectStack({
   const effectiveBloomEnabled = bloomEnabled;
   const effectiveScanlineEnabled = scanlineEnabled;
   const effectiveChromaticEnabled = chromaticAberrationEnabled;
+  const safeBloomIntensity = Math.min(bloomIntensity, 1.8);
+  const safeBloomRadius = Math.min(bloomRadius, 0.45);
+  const safeBloomSmoothing = THREE.MathUtils.clamp(bloomSmoothing, 0.2, 0.6);
+  const safeBloomThreshold = THREE.MathUtils.clamp(bloomThreshold, 0.05, 0.4);
 
   const barrelBlurOffsetVector = useMemo(() => new THREE.Vector2(barrelBlurOffsetX, barrelBlurOffsetY), []);
   const chromaticOffsetVector = useMemo(() => (
@@ -187,11 +191,10 @@ export default function SharedEffectStack({
     composerChildren.push(
       <Bloom
         key="bloom"
-        mipmapBlur
-        intensity={bloomIntensity}
-        luminanceThreshold={bloomThreshold}
-        luminanceSmoothing={bloomSmoothing}
-        radius={bloomRadius}
+        intensity={safeBloomIntensity}
+        luminanceThreshold={safeBloomThreshold}
+        luminanceSmoothing={safeBloomSmoothing}
+        radius={safeBloomRadius}
       />,
     );
   }
