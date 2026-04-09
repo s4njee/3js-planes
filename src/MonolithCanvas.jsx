@@ -49,6 +49,16 @@ const BOOST_SHAKE_Y_AMPLITUDE = 0.025;
 const BOOST_SHAKE_Z_AMPLITUDE = 0.05;
 const BASE_SCENE_BACKGROUND = 0x050709;
 const SKY_DOME_RADIUS = 90;
+const CINEMATIC_EXPOSURE_MULTIPLIER = 0.58;
+const CLOUDS_ENABLED = true;
+const CLOUD_LAYER_COUNT = 5;
+const CLOUDS_PER_LAYER = 20;
+const CLOUD_SCROLL_SPEED = 9;
+const CLOUD_FIELD_WIDTH = 95;
+const CLOUD_FIELD_DEPTH = 180;
+const CLOUD_FIELD_HEIGHT = 26;
+const CLOUD_AMBIENT_MIN_FACTOR = 0.58;
+const TERRAIN_ENABLED = false;
 const ELEVATION_SPEED = 5.5;
 const ELEVATION_LERP_SPEED = 5.5;
 const ELEVATION_MIN_OFFSET = -3.5;
@@ -59,34 +69,191 @@ const TERRAIN_TILE_COUNT = 3;
 const TERRAIN_TILE_LENGTH = 180;
 const TERRAIN_TILE_OVERLAP = 20;
 const TERRAIN_SCROLL_SPEED = 24;
-const TERRAIN_BASE_Y = -19.5;
+const TERRAIN_BASE_Y = -60;
 const TERRAIN_WIDTH = 220;
+const TERRAIN_RESOLUTION = 40;
 const TERRAIN_TREE_COUNT = 180;
 const TERRAIN_TREE_ATTEMPT_MULTIPLIER = 10;
+const TERRAIN_SAMPLE_Z_SCALE = 1.08;
+const TERRAIN_SAMPLE_X_DRIFT = 32;
+const TERRAIN_SAMPLE_Z_WARP = 10;
+const TERRAIN_GENERATOR_ARGS = Object.freeze({
+  seed: 17,
+  gain: 0.52,
+  lacunarity: 1.78,
+  frequency: 0.011,
+  amplitude: 1.08,
+  altitude: 0.18,
+  erosion: 0.84,
+  erosionSoftness: 0.32,
+  rivers: 0.48,
+  riversFrequency: 1.15,
+  riversSeed: 31,
+  riverWidth: 0.42,
+  riverFalloff: 0.42,
+  smoothLowerPlanes: 0.58,
+  octaves: 7,
+});
+const TERRAIN_HEIGHT_STRENGTH = 6.2 * (1 - TERRAIN_GENERATOR_ARGS.smoothLowerPlanes * 0.5);
+const TERRAIN_RIVER_WIDTH = THREE.MathUtils.mapLinear(TERRAIN_GENERATOR_ARGS.riverWidth, 0, 1, 0.5, 0.44);
+const TERRAIN_RIVER_FALLOFF = TERRAIN_GENERATOR_ARGS.riverFalloff * 0.3;
 
-function getTerrainHeight(x, worldZ) {
-  const broadHills =
-    Math.sin(x * 0.018) * 4.1 +
-    Math.cos(worldZ * 0.015) * 3.2 +
-    Math.sin((x * 0.032) + (worldZ * 0.022)) * 2.4;
-  const rollingDetail =
-    Math.sin((x * 0.082) - (worldZ * 0.051)) * 1.25 +
-    Math.cos((x * 0.055) + (worldZ * 0.09)) * 0.8;
-  const valley = -Math.exp(-Math.pow(x / 15.0, 2.0)) * 2.2;
-  return broadHills + rollingDetail + valley - 1.8;
+function fract(value) {
+  return value - Math.floor(value);
 }
 
-function getTerrainBiome(x, worldZ, height) {
-  const moisture =
-    0.62 +
-    (Math.sin((x + 40) * 0.02) * 0.22) +
-    (Math.cos((worldZ - 12) * 0.03) * 0.2) +
-    (Math.sin((x * 0.06) + (worldZ * 0.045)) * 0.14);
-  const fertility = moisture - (Math.max(height, 0) * 0.022);
+function hash2D(x, y, seed) {
+  return fract(Math.sin((x * 127.1) + (y * 311.7) + (seed * 74.7)) * 43758.5453123);
+}
+
+function sampleValueNoise2D(x, y, seed) {
+  const ix = Math.floor(x);
+  const iy = Math.floor(y);
+  const fx = x - ix;
+  const fy = y - iy;
+  const ux = fx * fx * (3 - (2 * fx));
+  const uy = fy * fy * (3 - (2 * fy));
+
+  const n00 = hash2D(ix, iy, seed);
+  const n10 = hash2D(ix + 1, iy, seed);
+  const n01 = hash2D(ix, iy + 1, seed);
+  const n11 = hash2D(ix + 1, iy + 1, seed);
+
+  const nx0 = THREE.MathUtils.lerp(n00, n10, ux);
+  const nx1 = THREE.MathUtils.lerp(n01, n11, ux);
+  return THREE.MathUtils.lerp(nx0, nx1, uy);
+}
+
+function sampleSignedNoise2D(x, y, seed) {
+  return (sampleValueNoise2D(x, y, seed) * 2) - 1;
+}
+
+function createFbmNoiseSampler({
+  octaves = 1,
+  lacunarity = 2,
+  frequency = 0.01,
+  amplitude = 1,
+  gain = 0.5,
+  seed = 0,
+  offset = 0,
+}) {
+  return (x, y) => {
+    let value = 0;
+    let amp = amplitude;
+    let freq = frequency;
+
+    for (let i = 0; i < octaves; i += 1) {
+      value += amp * sampleSignedNoise2D(x * freq, y * freq, seed + (i * 101));
+      freq *= lacunarity;
+      amp *= gain;
+    }
+
+    return value + offset;
+  };
+}
+
+function getTerrainSampleCoordinates(x, logicalZ) {
+  return {
+    sampleX: x
+      + (Math.sin(logicalZ * 0.0065) * TERRAIN_SAMPLE_X_DRIFT)
+      + (Math.sin(logicalZ * 0.0023) * 12),
+    sampleZ: (logicalZ * TERRAIN_SAMPLE_Z_SCALE) + (Math.sin(x * 0.021) * TERRAIN_SAMPLE_Z_WARP),
+  };
+}
+
+const terrainBaseNoise = createFbmNoiseSampler({
+  octaves: TERRAIN_GENERATOR_ARGS.octaves,
+  lacunarity: TERRAIN_GENERATOR_ARGS.lacunarity,
+  gain: TERRAIN_GENERATOR_ARGS.gain,
+  seed: TERRAIN_GENERATOR_ARGS.seed,
+  offset: 0.25,
+  amplitude: TERRAIN_GENERATOR_ARGS.amplitude,
+  frequency: TERRAIN_GENERATOR_ARGS.frequency,
+});
+
+const terrainBiomeNoise = createFbmNoiseSampler({
+  octaves: 1,
+  seed: TERRAIN_GENERATOR_ARGS.seed + 4,
+  frequency: 0.012,
+  amplitude: 1,
+  gain: 1,
+  lacunarity: 1,
+});
+
+const terrainErosionNoise = createFbmNoiseSampler({
+  octaves: 3,
+  lacunarity: 1.8,
+  gain: 0.5,
+  seed: TERRAIN_GENERATOR_ARGS.seed + 1,
+  offset: 0.3,
+  amplitude: 0.2,
+  frequency: TERRAIN_GENERATOR_ARGS.frequency,
+});
+
+const terrainRiverNoise = createFbmNoiseSampler({
+  octaves: 4,
+  gain: 0.35,
+  lacunarity: 2,
+  seed: TERRAIN_GENERATOR_ARGS.riversSeed,
+  amplitude: 0.2,
+  frequency: TERRAIN_GENERATOR_ARGS.frequency * TERRAIN_GENERATOR_ARGS.riversFrequency,
+});
+
+function sampleTerrainField(x, worldZ) {
+  const { sampleX, sampleZ } = getTerrainSampleCoordinates(x, worldZ);
+  let terrainNoise = terrainBaseNoise(sampleX, sampleZ);
+
+  const biomeNoise = terrainBiomeNoise(sampleX, sampleZ);
+  const erosionNoise = terrainBiomeNoise(sampleX + 500, sampleZ + 500) * 0.6 - 0.1;
+  const erosionSoftness = erosionNoise + TERRAIN_GENERATOR_ARGS.erosionSoftness;
+  let erosion = terrainErosionNoise(sampleX, sampleZ);
+
+  erosion = THREE.MathUtils.smoothstep(erosion, 0, 1);
+  erosion = Math.pow(erosion, 1 + erosionSoftness);
+  erosion = THREE.MathUtils.clamp(THREE.MathUtils.pingpong(erosion * 2, 1) - 0.3, 0, 100);
+
+  terrainNoise *= THREE.MathUtils.lerp(1, erosion, TERRAIN_GENERATOR_ARGS.erosion * terrainNoise);
+
+  let riverMask = (Math.abs(terrainRiverNoise(sampleX, sampleZ)) - 0.5) * 2;
+  riverMask = THREE.MathUtils.pingpong(riverMask, 0.5);
+  riverMask = THREE.MathUtils.clamp(
+    THREE.MathUtils.mapLinear(riverMask, TERRAIN_RIVER_WIDTH, TERRAIN_RIVER_WIDTH + TERRAIN_RIVER_FALLOFF, 1, 0),
+    0,
+    1,
+  );
+  riverMask = (1 - THREE.MathUtils.smoothstep(riverMask, 0, 1)) * 0.5;
+
+  const altitudeNoise = biomeNoise * 1.4 - 0.75;
+  terrainNoise += TERRAIN_GENERATOR_ARGS.altitude + altitudeNoise;
+  terrainNoise = THREE.MathUtils.lerp(
+    terrainNoise * terrainNoise,
+    terrainNoise * terrainNoise * terrainNoise,
+    TERRAIN_GENERATOR_ARGS.smoothLowerPlanes,
+  );
+
+  return {
+    biomeNoise,
+    height: (terrainNoise - (riverMask * TERRAIN_GENERATOR_ARGS.rivers)) * TERRAIN_HEIGHT_STRENGTH,
+    riverMask,
+  };
+}
+
+function getTerrainHeight(x, worldZ) {
+  return sampleTerrainField(x, worldZ).height;
+}
+
+function getTerrainBiomeFromField(field, height = field.height) {
+  const moisture = THREE.MathUtils.clamp(0.54 + (field.biomeNoise * 0.3) + (field.riverMask * 0.95), 0.18, 1.15);
+  const fertility = THREE.MathUtils.clamp(moisture - (Math.max(height, 0) * 0.024), 0.08, 1.05);
   return {
     fertility,
     moisture,
+    riverMask: field.riverMask,
   };
+}
+
+function getTerrainBiome(x, worldZ, height) {
+  return getTerrainBiomeFromField(sampleTerrainField(x, worldZ), height);
 }
 
 function getTerrainNormal(x, worldZ) {
@@ -105,10 +272,10 @@ function disposeTerrainTileContents(tileGroup) {
   tileGroup.clear();
 }
 
-function populateTerrainTile(tileGroup, zOffset) {
+function populateTerrainTile(tileGroup, { renderZOffset, logicalZOffset }) {
   const length = TERRAIN_TILE_LENGTH + TERRAIN_TILE_OVERLAP;
-  const widthSegments = 28;
-  const lengthSegments = 28;
+  const widthSegments = TERRAIN_RESOLUTION;
+  const lengthSegments = TERRAIN_RESOLUTION;
   const geometry = new THREE.PlaneGeometry(TERRAIN_WIDTH, length, widthSegments, lengthSegments);
   geometry.rotateX(-Math.PI / 2);
 
@@ -121,18 +288,19 @@ function populateTerrainTile(tileGroup, zOffset) {
   for (let i = 0; i < positions.count; i++) {
     const x = positions.getX(i);
     const z = positions.getZ(i);
-    const worldZ = z + zOffset;
-    const height = getTerrainHeight(x, worldZ);
+    const logicalWorldZ = z + logicalZOffset;
+    const field = sampleTerrainField(x, logicalWorldZ);
+    const height = field.height;
     positions.setY(i, height);
-    vertexNormal.copy(getTerrainNormal(x, worldZ));
+    vertexNormal.copy(getTerrainNormal(x, logicalWorldZ));
     normals[i * 3] = vertexNormal.x;
     normals[i * 3 + 1] = vertexNormal.y;
     normals[i * 3 + 2] = vertexNormal.z;
 
-    const { fertility, moisture } = getTerrainBiome(x, worldZ, height);
-    const hue = THREE.MathUtils.clamp(0.29 + (fertility * 0.028) - (height * 0.002), 0.27, 0.35);
-    const saturation = THREE.MathUtils.clamp(0.24 + (moisture * 0.18), 0.2, 0.4);
-    const lightness = THREE.MathUtils.clamp(0.1 + ((height + 6.5) / 42) + (fertility * 0.018), 0.08, 0.22);
+    const { fertility, moisture } = getTerrainBiomeFromField(field, height);
+    const hue = THREE.MathUtils.clamp(0.315 + (fertility * 0.008) - (height * 0.0008), 0.305, 0.335);
+    const saturation = THREE.MathUtils.clamp(0.11 + (moisture * 0.065), 0.1, 0.19);
+    const lightness = THREE.MathUtils.clamp(0.026 + ((height + 6.5) / 150) + (fertility * 0.004), 0.024, 0.062);
     color.setHSL(hue, saturation, lightness);
     colors[i * 3] = color.r;
     colors[i * 3 + 1] = color.g;
@@ -145,7 +313,7 @@ function populateTerrainTile(tileGroup, zOffset) {
   const material = new THREE.MeshBasicMaterial({
     vertexColors: true,
     transparent: true,
-    opacity: 0.98,
+    opacity: 1.0,
     side: THREE.DoubleSide,
   });
 
@@ -173,16 +341,17 @@ function populateTerrainTile(tileGroup, zOffset) {
     attempts += 1;
     const x = (Math.random() - 0.5) * (TERRAIN_WIDTH - 14);
     const z = (Math.random() - 0.5) * (length - 10);
-    const worldZ = z + zOffset;
-    const height = getTerrainHeight(x, worldZ);
-    const { fertility } = getTerrainBiome(x, worldZ, height);
+    const logicalWorldZ = z + logicalZOffset;
+    const field = sampleTerrainField(x, logicalWorldZ);
+    const height = field.height;
+    const { fertility, riverMask } = getTerrainBiomeFromField(field, height);
 
-    const slopeX = getTerrainHeight(x + 0.8, worldZ) - getTerrainHeight(x - 0.8, worldZ);
-    const slopeZ = getTerrainHeight(x, worldZ + 0.8) - getTerrainHeight(x, worldZ - 0.8);
+    const slopeX = getTerrainHeight(x + 0.8, logicalWorldZ) - getTerrainHeight(x - 0.8, logicalWorldZ);
+    const slopeZ = getTerrainHeight(x, logicalWorldZ + 0.8) - getTerrainHeight(x, logicalWorldZ - 0.8);
     const slope = Math.hypot(slopeX, slopeZ);
-    const inRiver = Math.abs(x) < 11 && fertility < 0.56;
+    const inRiver = riverMask > 0.12;
 
-    if (fertility < 0.5 || slope > 1.15 || inRiver || height < -4.9) {
+    if (fertility < 0.5 || slope > 1.35 || inRiver || height < -4.9) {
       continue;
     }
 
@@ -217,12 +386,13 @@ function populateTerrainTile(tileGroup, zOffset) {
   tileGroup.add(trunkMesh);
   tileGroup.add(canopyMesh);
 
-  tileGroup.position.set(0, TERRAIN_BASE_Y, zOffset);
+  tileGroup.userData.logicalZOffset = logicalZOffset;
+  tileGroup.position.set(0, TERRAIN_BASE_Y, renderZOffset);
 }
 
-function createTerrainTile({ zOffset }) {
+function createTerrainTile({ renderZOffset, logicalZOffset }) {
   const tileGroup = new THREE.Group();
-  populateTerrainTile(tileGroup, zOffset);
+  populateTerrainTile(tileGroup, { renderZOffset, logicalZOffset });
   return tileGroup;
 }
 
@@ -288,11 +458,16 @@ function createSkyDome() {
         vec3 dir = normalize(vDirection);
         float horizon = clamp((dir.y + 0.22) * 0.9, 0.0, 1.0);
 
-        vec3 zenith = vec3(0.05, 0.02, 0.24);
-        vec3 midSky = vec3(0.08, 0.12, 0.42);
-        vec3 horizonColor = vec3(0.10, 0.22, 0.56);
+        vec3 zenith = vec3(0.015, 0.008, 0.07);
+        vec3 midSky = vec3(0.14, 0.04, 0.18);
+        vec3 horizonColor = vec3(0.42, 0.16, 0.14);
         vec3 base = mix(horizonColor, midSky, smoothstep(0.0, 0.42, horizon));
         base = mix(base, zenith, smoothstep(0.35, 1.0, horizon));
+
+        float sunsetBand = smoothstep(-0.22, 0.1, dir.y) * (1.0 - smoothstep(0.1, 0.34, dir.y));
+        base += vec3(0.34, 0.10, 0.08) * sunsetBand * 0.72;
+        base += vec3(0.24, 0.05, 0.16) * sunsetBand * 0.62;
+        base += vec3(0.38, 0.18, 0.10) * pow(sunsetBand, 1.6) * 0.4;
 
         vec3 nebulaPos = vec3(
           dir.x * 2.8 + time * 0.015,
@@ -300,18 +475,25 @@ function createSkyDome() {
           dir.z * 2.8
         );
         float nebula = fbm(nebulaPos);
-        float wisps = smoothstep(0.5, 0.82, nebula) * smoothstep(-0.15, 0.75, dir.y);
-        float secondary = smoothstep(0.58, 0.9, fbm(nebulaPos * 1.9 + 7.3)) * 0.6;
+        float wisps = smoothstep(0.45, 0.8, nebula) * smoothstep(-0.2, 0.78, dir.y);
+        float secondary = smoothstep(0.52, 0.88, fbm(nebulaPos * 1.9 + 7.3)) * 0.78;
+        float cloudLayer = smoothstep(0.42, 0.74, fbm(nebulaPos * 1.3 + vec3(4.2, -1.8, 2.7))) * smoothstep(-0.24, 0.38, dir.y);
+        float highClouds = smoothstep(0.5, 0.76, fbm(nebulaPos * 2.4 + vec3(-6.0, 2.5, 1.2))) * smoothstep(0.08, 0.7, dir.y) * 0.55;
 
-        vec3 nebulaBlue = vec3(0.20, 0.34, 0.88);
-        vec3 nebulaPurple = vec3(0.36, 0.14, 0.72);
-        vec3 nebulaGlow = vec3(0.56, 0.48, 1.0);
-        base += nebulaBlue * wisps * 0.55;
-        base += nebulaPurple * wisps * 0.32;
-        base += nebulaGlow * secondary * 0.3;
+        vec3 nebulaBlue = vec3(0.08, 0.08, 0.22);
+        vec3 nebulaPurple = vec3(0.36, 0.08, 0.28);
+        vec3 nebulaGlow = vec3(0.64, 0.22, 0.18);
+        vec3 cloudWarm = vec3(0.78, 0.30, 0.18);
+        vec3 cloudPink = vec3(0.62, 0.18, 0.28);
+        base += nebulaBlue * wisps * 0.16;
+        base += nebulaPurple * wisps * 0.46;
+        base += nebulaGlow * secondary * 0.34;
+        base += cloudWarm * cloudLayer * 0.24;
+        base += cloudPink * cloudLayer * 0.22;
+        base += vec3(0.42, 0.16, 0.24) * highClouds * 0.3;
 
         float vignette = 1.0 - smoothstep(0.15, 1.0, length(dir.xz) * 0.85);
-        base += vec3(0.08, 0.10, 0.24) * vignette * 0.18;
+        base += vec3(0.07, 0.025, 0.09) * vignette * 0.28;
 
         gl_FragColor = vec4(base, 1.0);
       }
@@ -322,6 +504,90 @@ function createSkyDome() {
   mesh.renderOrder = -100;
   mesh.frustumCulled = false;
   return mesh;
+}
+
+function createCloudTexture() {
+  const size = 256;
+  const canvas = document.createElement('canvas');
+  canvas.width = size;
+  canvas.height = size;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return null;
+
+  ctx.clearRect(0, 0, size, size);
+
+  const puffs = [
+    { x: 0.34, y: 0.52, r: 0.26, a: 0.9 },
+    { x: 0.52, y: 0.44, r: 0.24, a: 0.82 },
+    { x: 0.66, y: 0.54, r: 0.2, a: 0.74 },
+    { x: 0.48, y: 0.64, r: 0.2, a: 0.66 },
+  ];
+
+  puffs.forEach(({ x, y, r, a }) => {
+    const gradient = ctx.createRadialGradient(
+      x * size,
+      y * size,
+      size * 0.02,
+      x * size,
+      y * size,
+      size * r,
+    );
+    gradient.addColorStop(0, `rgba(255,255,255,${a})`);
+    gradient.addColorStop(0.55, `rgba(255,255,255,${a * 0.42})`);
+    gradient.addColorStop(1, 'rgba(255,255,255,0)');
+    ctx.fillStyle = gradient;
+    ctx.fillRect(0, 0, size, size);
+  });
+
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  texture.needsUpdate = true;
+  return texture;
+}
+
+function randomizeCloudSprite(sprite, layerIndex, depth = null) {
+  const layerT = CLOUD_LAYER_COUNT <= 1 ? 0.5 : layerIndex / (CLOUD_LAYER_COUNT - 1);
+  const layerCenterY = THREE.MathUtils.lerp(-(CLOUD_FIELD_HEIGHT * 0.5), CLOUD_FIELD_HEIGHT * 0.5, layerT);
+  const distanceFromMid = Math.abs(layerT - 0.5) * 2;
+  const scale = 11 + Math.random() * 14 + ((1 - distanceFromMid) * 2.2);
+  sprite.position.set(
+    (Math.random() - 0.5) * CLOUD_FIELD_WIDTH,
+    layerCenterY + ((Math.random() - 0.5) * 5.5),
+    depth ?? (-Math.random() * CLOUD_FIELD_DEPTH),
+  );
+  sprite.scale.set(scale * (1.35 + Math.random() * 0.7), scale, 1);
+  sprite.material.opacity = 0.16 + Math.random() * 0.2;
+  sprite.userData.scrollSpeed = 0.7 + Math.random() * 0.9 + ((1 - distanceFromMid) * 0.28);
+}
+
+function createCloudField() {
+  const texture = createCloudTexture();
+  const group = new THREE.Group();
+  group.renderOrder = -20;
+
+  for (let layerIndex = 0; layerIndex < CLOUD_LAYER_COUNT; layerIndex += 1) {
+    for (let i = 0; i < CLOUDS_PER_LAYER; i += 1) {
+      const material = new THREE.SpriteMaterial({
+        map: texture,
+        color: new THREE.Color().setHSL(
+          0.03 + (layerIndex * 0.015),
+          0.28 + (Math.random() * 0.12),
+          0.86 + (Math.random() * 0.08),
+        ),
+        transparent: true,
+        depthWrite: false,
+        depthTest: true,
+        opacity: 0.22,
+      });
+      const sprite = new THREE.Sprite(material);
+      randomizeCloudSprite(sprite, layerIndex, -Math.random() * CLOUD_FIELD_DEPTH);
+      sprite.userData.layerIndex = layerIndex;
+      group.add(sprite);
+    }
+  }
+
+  group.userData.texture = texture;
+  return group;
 }
 
 function mapMonolithBloomSettings(guiParams) {
@@ -435,6 +701,11 @@ function MonolithScene() {
   const heatShimmerRef = useRef(null);
   const heatShimmerMaterialRef = useRef(null);
   const skyDomeRef = useRef(null);
+  const cloudFieldRef = useRef(null);
+  const cloudStateRef = useRef({
+    density: 0,
+    ambientFactor: 1,
+  });
   const terrainTilesRef = useRef([]);
   const flightControlRef = useRef({
     ascendPressed: false,
@@ -562,6 +833,9 @@ function MonolithScene() {
       : new THREE.Color(effectiveWhiteMode ? 0xffffff : BASE_SCENE_BACKGROUND);
     if (skyDomeRef.current) {
       skyDomeRef.current.visible = !effectiveWhiteMode;
+    }
+    if (cloudFieldRef.current) {
+      cloudFieldRef.current.visible = !effectiveWhiteMode && CLOUDS_ENABLED;
     }
     overlaysRef.current?.applyWhiteMode(effectiveWhiteMode);
     uiRef.current?.applyWhiteMode();
@@ -964,7 +1238,7 @@ function MonolithScene() {
 
     gl.setPixelRatio(window.devicePixelRatio);
     gl.toneMapping = THREE.ACESFilmicToneMapping;
-    gl.toneMappingExposure = 1.1;
+    gl.toneMappingExposure = guiParamsRef.current.exposure;
     gl.domElement.style.position = 'relative';
     gl.domElement.style.zIndex = '1';
     gl.domElement.style.touchAction = 'none';
@@ -1135,11 +1409,22 @@ function MonolithScene() {
     scene.add(skyDome);
     skyDomeRef.current = skyDome;
 
-    const terrainTiles = Array.from({ length: TERRAIN_TILE_COUNT }, (_, index) => (
-      createTerrainTile({ zOffset: -index * TERRAIN_TILE_LENGTH })
-    ));
-    terrainTiles.forEach((tile) => scene.add(tile));
-    terrainTilesRef.current = terrainTiles;
+    if (CLOUDS_ENABLED) {
+      const cloudField = createCloudField();
+      scene.add(cloudField);
+      cloudFieldRef.current = cloudField;
+    }
+
+    if (TERRAIN_ENABLED) {
+      const terrainTiles = Array.from({ length: TERRAIN_TILE_COUNT }, (_, index) => (
+        createTerrainTile({
+          renderZOffset: -index * TERRAIN_TILE_LENGTH,
+          logicalZOffset: -index * TERRAIN_TILE_LENGTH,
+        })
+      ));
+      terrainTiles.forEach((tile) => scene.add(tile));
+      terrainTilesRef.current = terrainTiles;
+    }
 
     // Create heat shimmer mesh behind the monolith
     const shimmerGroup = new THREE.Group();
@@ -1246,6 +1531,7 @@ function MonolithScene() {
       getMonolith: () => monolithRef.current,
       guiParams: guiParamsRef.current,
       getIsBoosting: () => stateRef.current.animationSpeedBoostEnabled && supportsAnimationSpeedBoost(),
+      getCloudAmbientFactor: () => cloudStateRef.current.ambientFactor,
     });
 
     uiRef.current = createUI({
@@ -1403,6 +1689,15 @@ function MonolithScene() {
         skyDomeRef.current.geometry.dispose();
         skyDomeRef.current.material.dispose();
       }
+      if (cloudFieldRef.current) {
+        scene.remove(cloudFieldRef.current);
+        cloudFieldRef.current.traverse((child) => {
+          if (child.isSprite) {
+            child.material.dispose();
+          }
+        });
+        cloudFieldRef.current.userData.texture?.dispose?.();
+      }
       terrainTilesRef.current.forEach((tile) => {
         scene.remove(tile);
         disposeTerrainTileContents(tile);
@@ -1473,6 +1768,15 @@ function MonolithScene() {
     );
     applyMonolithTransform();
 
+    const targetExposure = guiParamsRef.current.exposure * (
+      effectSnapshot.cinematicEnabled ? CINEMATIC_EXPOSURE_MULTIPLIER : 1
+    );
+    gl.toneMappingExposure = THREE.MathUtils.lerp(
+      gl.toneMappingExposure,
+      targetExposure,
+      delta * 6,
+    );
+
     const targetFov = THREE.MathUtils.lerp(
       BASE_CAMERA_FOV,
       BOOST_CAMERA_FOV,
@@ -1495,22 +1799,69 @@ function MonolithScene() {
       skyDomeRef.current.material.uniforms.time.value = elapsed;
     }
 
-    if (terrainTilesRef.current.length > 0) {
+    if (CLOUDS_ENABLED && cloudFieldRef.current) {
+      let densityAccumulator = 0;
+      const monolithY = monolithRef.current?.position.y ?? 0;
+      const cloudSpeed = CLOUD_SCROLL_SPEED * (1 + boostVisualState.intensity * 1.8);
+
+      cloudFieldRef.current.children.forEach((cloud) => {
+        cloud.position.z += cloudSpeed * cloud.userData.scrollSpeed * delta;
+        if (cloud.position.z > 22) {
+          randomizeCloudSprite(
+            cloud,
+            cloud.userData.layerIndex ?? 0,
+            -(CLOUD_FIELD_DEPTH + (Math.random() * 28)),
+          );
+        }
+
+        const zCloseness = 1 - THREE.MathUtils.smoothstep(8, 36, Math.abs(cloud.position.z));
+        const yCloseness = 1 - THREE.MathUtils.smoothstep(2.5, 11.5, Math.abs(cloud.position.y - monolithY));
+        const sizeWeight = THREE.MathUtils.clamp(cloud.scale.y / 26, 0.2, 1);
+        densityAccumulator += zCloseness * yCloseness * cloud.material.opacity * sizeWeight;
+      });
+
+      const targetDensity = THREE.MathUtils.clamp(densityAccumulator * 0.16, 0, 1);
+      cloudStateRef.current.density = THREE.MathUtils.lerp(
+        cloudStateRef.current.density,
+        targetDensity,
+        delta * 2.2,
+      );
+      cloudStateRef.current.ambientFactor = THREE.MathUtils.lerp(
+        1,
+        CLOUD_AMBIENT_MIN_FACTOR,
+        cloudStateRef.current.density,
+      );
+    } else {
+      cloudStateRef.current.density = THREE.MathUtils.lerp(cloudStateRef.current.density, 0, delta * 2.2);
+      cloudStateRef.current.ambientFactor = THREE.MathUtils.lerp(cloudStateRef.current.ambientFactor, 1, delta * 2.2);
+    }
+
+    if (TERRAIN_ENABLED && terrainTilesRef.current.length > 0) {
       const scrollSpeed = TERRAIN_SCROLL_SPEED * (1 + boostVisualState.intensity * 2.6);
       const wrapThreshold = TERRAIN_TILE_LENGTH * 0.75;
       let furthestBackZ = Infinity;
+      let furthestBackLogicalZ = Infinity;
 
       terrainTilesRef.current.forEach((tile) => {
         furthestBackZ = Math.min(furthestBackZ, tile.position.z);
+        furthestBackLogicalZ = Math.min(
+          furthestBackLogicalZ,
+          tile.userData.logicalZOffset ?? tile.position.z,
+        );
       });
 
       terrainTilesRef.current.forEach((tile) => {
         tile.position.z += scrollSpeed * delta;
         if (tile.position.z > wrapThreshold) {
-          const nextZOffset = furthestBackZ - TERRAIN_TILE_LENGTH;
+          const nextRenderZOffset = furthestBackZ - TERRAIN_TILE_LENGTH;
+          const nextLogicalZOffset = furthestBackLogicalZ - TERRAIN_TILE_LENGTH;
           disposeTerrainTileContents(tile);
-          populateTerrainTile(tile, nextZOffset);
-          furthestBackZ = nextZOffset;
+          populateTerrainTile(tile, {
+            renderZOffset: nextRenderZOffset,
+            logicalZOffset: nextLogicalZOffset,
+          });
+          furthestBackZ = nextRenderZOffset;
+          furthestBackLogicalZ = nextLogicalZOffset;
         }
       });
     }

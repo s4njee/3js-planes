@@ -12,7 +12,7 @@ import { resolveAssetUrl } from './asset-url.js';
 // The returned object exposes only the methods MonolithScene needs;
 // all internal light instances and buffers are fully encapsulated.
 
-export function createLightingRig({ scene, currentSetDef, getCurrentModelIndex, getMonolith, guiParams, getIsBoosting }) {
+export function createLightingRig({ scene, currentSetDef, getCurrentModelIndex, getMonolith, guiParams, getIsBoosting, getCloudAmbientFactor }) {
   // ── Animation constants ─────────────────────────────────────────────────────
   const RING_TOP = 8;        // World-space Y where a moving ring light starts
   const RING_BOTTOM = -3;    // World-space Y where it exits the frame
@@ -220,6 +220,11 @@ export function createLightingRig({ scene, currentSetDef, getCurrentModelIndex, 
     }
 
     return `${guiParams.ambientColor}:${guiParams.ambientIntensity}`;
+  }
+
+  function applyCloudAmbientFactor() {
+    const cloudAmbientFactor = getCloudAmbientFactor ? getCloudAmbientFactor() : 1;
+    ambient.intensity *= cloudAmbientFactor;
   }
 
   function getPulse(progress) {
@@ -498,6 +503,7 @@ export function createLightingRig({ scene, currentSetDef, getCurrentModelIndex, 
     ambient.color.set(0xffffff);
     const isBoosting = getIsBoosting ? getIsBoosting() : false;
     ambient.intensity = isBoosting ? 0.34 : 0.08;
+    applyCloudAmbientFactor();
 
     if (isBoosting) {
       // Keep the aircraft readable when boost motion pulls the particle-driven
@@ -557,6 +563,7 @@ export function createLightingRig({ scene, currentSetDef, getCurrentModelIndex, 
     heroSpotLight.intensity = config.heroSpotlightIntensity;
 
     applyAmbientOverrides();
+    applyCloudAmbientFactor();
   }
 
   function animateBloomRing() {
