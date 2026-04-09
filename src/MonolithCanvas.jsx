@@ -173,42 +173,39 @@ function MonolithScene() {
   const supportsAnimationSpeedBoost = () => Boolean(currentSetDef().supportsAnimationSpeedBoost);
   const getLightingModeLabel = (mode) => LIGHTING_MODE_LABELS[mode] ?? LIGHTING_MODE_LABELS[0];
   const getEffectiveWhiteMode = () => stateRef.current.whiteMode;
-  const getCurrentEngineShimmers = () => {
-    const currentModel = currentModels()[stateRef.current.currentModelIndex];
-    if (currentModel?.engineShimmers?.length) {
-      return currentModel.engineShimmers;
-    }
-
-    return [
-      {
-        x: guiParamsRef.current.shimmerOffsetX,
-        y: guiParamsRef.current.shimmerOffsetY,
-        z: guiParamsRef.current.shimmerOffsetZ,
-      },
-      {
-        x: guiParamsRef.current.shimmerOffsetX,
-        y: guiParamsRef.current.shimmerOffsetY,
-        z: -guiParamsRef.current.shimmerOffsetZ + 0.14,
-      },
-    ];
+  const getFallbackEngineShimmers = () => ([
+    {
+      x: guiParamsRef.current.shimmerOffsetX,
+      y: guiParamsRef.current.shimmerOffsetY,
+      z: guiParamsRef.current.shimmerOffsetZ,
+    },
+    {
+      x: guiParamsRef.current.shimmerOffsetX,
+      y: guiParamsRef.current.shimmerOffsetY,
+      z: -guiParamsRef.current.shimmerOffsetZ + 0.14,
+    },
+  ]);
+  const getModelEngineShimmers = (modelIndex) => {
+    const model = currentModels()[modelIndex];
+    if (!model) return [];
+    if (Array.isArray(model.engineShimmers)) return model.engineShimmers;
+    return modelIndex === 0 || modelIndex === 1 ? getFallbackEngineShimmers() : [];
   };
   const rebuildHeatShimmerMeshes = () => {
-    if (!heatShimmerRef.current) return;
+    if (!heatShimmerRef.current || !heatShimmerMaterialRef.current) return;
 
     const shimmerGroup = heatShimmerRef.current;
-    const shimmerMaterial = heatShimmerMaterialRef.current;
+    const shimmerConfigs = getModelEngineShimmers(stateRef.current.currentModelIndex);
 
     shimmerGroup.children.forEach((child) => {
       child.geometry.dispose();
     });
     shimmerGroup.clear();
 
-    if (!shimmerMaterial) return;
-
-    getCurrentEngineShimmers().forEach(() => {
+    shimmerConfigs.forEach(() => {
       const geometry = new THREE.CylinderGeometry(0.2, 0.0, 3.5, 32, 1, true);
       geometry.rotateZ(Math.PI / 2);
-      shimmerGroup.add(new THREE.Mesh(geometry, shimmerMaterial));
+      shimmerGroup.add(new THREE.Mesh(geometry, heatShimmerMaterialRef.current));
     });
   };
   const setAnimationSpeedBoost = (enabled) => {
@@ -459,6 +456,7 @@ function MonolithScene() {
     if (!loaderRef.current || index === stateRef.current.currentModelIndex) return;
     stateRef.current.currentModelIndex = index;
     rebuildHeatShimmerMeshes();
+    guiControlsRef.current?.rebuildEngineShimmerFolder();
     syncEffectSnapshot({ triggerGlitch: true });
     gl.domElement.style.opacity = '0';
     overlaysRef.current?.updateTextVisibility(-1);
@@ -832,6 +830,12 @@ function MonolithScene() {
     const shimmerGroup = new THREE.Group();
     shimmerGroup.visible = false;
 
+    const shimmerGeoLeft = new THREE.CylinderGeometry(0.2, 0.0, 3.5, 32, 1, true);
+    shimmerGeoLeft.rotateZ(Math.PI / 2); // align along local X axis
+
+    const shimmerGeoRight = new THREE.CylinderGeometry(0.2, 0.0, 3.5, 32, 1, true);
+    shimmerGeoRight.rotateZ(Math.PI / 2);
+
     const shimmerMat = new THREE.ShaderMaterial({
       transparent: true,
       depthWrite: false,
@@ -937,6 +941,8 @@ function MonolithScene() {
 
     guiControlsRef.current = createGuiControls({
       guiParams: guiParamsRef.current,
+      models: currentModels(),
+      getCurrentModelIndex: () => stateRef.current.currentModelIndex,
       renderer: gl,
       scene,
       onWhiteModeChange: setWhiteMode,
@@ -947,6 +953,11 @@ function MonolithScene() {
           restoreChromaticAfterXray: stateRef.current.restoreChromaticAberrationAfterXray,
           xrayMode: stateRef.current.xrayMode,
         }, enabled));
+      },
+      onEngineShimmerChange: (modelIndex) => {
+        if (modelIndex === stateRef.current.currentModelIndex) {
+          rebuildHeatShimmerMeshes();
+        }
       },
       onEffectSettingsChange: syncEffectSnapshot,
       onTriggerGlitch: () => syncEffectSnapshot({ triggerGlitch: true }),
@@ -1114,13 +1125,10 @@ function MonolithScene() {
     }
 
     if (heatShimmerRef.current && heatShimmerRef.current.children.length > 0) {
-      const engineShimmers = getCurrentEngineShimmers();
-      const isBoosting = (
-        engineShimmers.length > 0
+      const engineShimmers = getModelEngineShimmers(stateRef.current.currentModelIndex);
+      const isBoosting = engineShimmers.length > 0
         && stateRef.current.animationSpeedBoostEnabled
-        && supportsAnimationSpeedBoost()
-      );
-
+        && supportsAnimationSpeedBoost();
       const firstMesh = heatShimmerRef.current.children[0];
       const mat = firstMesh.material;
       
