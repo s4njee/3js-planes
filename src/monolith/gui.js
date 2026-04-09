@@ -58,7 +58,7 @@ export function createDefaultGuiParams() {
     lightingMode: lightingModes[1],
     modelRotationX: 0.0,
     modelRotationY: -1.58,
-    modelRotationZ: -0.33,
+    modelRotationZ: 0.021592653589793,
     shimmerOffsetX: 6.13,
     shimmerOffsetY: 0.41,
     shimmerOffsetZ: 1.4,

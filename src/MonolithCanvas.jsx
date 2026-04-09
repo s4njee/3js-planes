@@ -36,6 +36,17 @@ const LIGHTING_MODE_LABELS = [
 ];
 const CHROMATIC_OSCILLATION_SPEED = 3.2;
 const ANIMATION_SPEED_BOOST_MULTIPLIER = 1.4;
+const TOUCH_LONG_PRESS_DELAY_MS = 420;
+const TOUCH_TAP_MAX_MOVEMENT_PX = 12;
+const TOUCH_DOUBLE_TAP_MAX_DELAY_MS = 300;
+const TOUCH_DOUBLE_TAP_MAX_DISTANCE_PX = 24;
+const BASE_CAMERA_FOV = 45;
+const BOOST_CAMERA_FOV = 75;
+const BOOST_FOV_LERP_SPEED = 6;
+const BOOST_SHAKE_LERP_SPEED = 8;
+const BOOST_SHAKE_X_AMPLITUDE = 0.035;
+const BOOST_SHAKE_Y_AMPLITUDE = 0.025;
+const BOOST_SHAKE_Z_AMPLITUDE = 0.05;
 
 function mapMonolithBloomSettings(guiParams) {
   // Monolith's legacy sliders were tuned for UnrealBloomPass. Translate them
@@ -144,7 +155,12 @@ function MonolithScene() {
   const mixerRef = useRef(null);
   const monolithRef = useRef(new THREE.Group());
   const heatShimmerRef = useRef(null);
+  const heatShimmerMaterialRef = useRef(null);
   const stateRef = useRef(createInitialMonolithState());
+  const boostVisualStateRef = useRef({
+    intensity: 0,
+    lastShakeOffset: new THREE.Vector3(),
+  });
   const glitchTriggerTokenRef = useRef(0);
   const [effectSnapshot, setEffectSnapshot] = useState(() => (
     createMonolithEffectSnapshot(guiParamsRef.current, stateRef.current, glitchTriggerTokenRef.current)
@@ -157,6 +173,60 @@ function MonolithScene() {
   const supportsAnimationSpeedBoost = () => Boolean(currentSetDef().supportsAnimationSpeedBoost);
   const getLightingModeLabel = (mode) => LIGHTING_MODE_LABELS[mode] ?? LIGHTING_MODE_LABELS[0];
   const getEffectiveWhiteMode = () => stateRef.current.whiteMode;
+  const getCurrentEngineShimmers = () => {
+    const currentModel = currentModels()[stateRef.current.currentModelIndex];
+    if (currentModel?.engineShimmers?.length) {
+      return currentModel.engineShimmers;
+    }
+
+    return [
+      {
+        x: guiParamsRef.current.shimmerOffsetX,
+        y: guiParamsRef.current.shimmerOffsetY,
+        z: guiParamsRef.current.shimmerOffsetZ,
+      },
+      {
+        x: guiParamsRef.current.shimmerOffsetX,
+        y: guiParamsRef.current.shimmerOffsetY,
+        z: -guiParamsRef.current.shimmerOffsetZ + 0.14,
+      },
+    ];
+  };
+  const rebuildHeatShimmerMeshes = () => {
+    if (!heatShimmerRef.current) return;
+
+    const shimmerGroup = heatShimmerRef.current;
+    const shimmerMaterial = heatShimmerMaterialRef.current;
+
+    shimmerGroup.children.forEach((child) => {
+      child.geometry.dispose();
+    });
+    shimmerGroup.clear();
+
+    if (!shimmerMaterial) return;
+
+    getCurrentEngineShimmers().forEach(() => {
+      const geometry = new THREE.CylinderGeometry(0.2, 0.0, 3.5, 32, 1, true);
+      geometry.rotateZ(Math.PI / 2);
+      shimmerGroup.add(new THREE.Mesh(geometry, shimmerMaterial));
+    });
+  };
+  const setAnimationSpeedBoost = (enabled) => {
+    if (!supportsAnimationSpeedBoost()) return;
+    stateRef.current.animationSpeedBoostEnabled = enabled;
+    syncAnimationMixerSpeed();
+    syncEffectSnapshot();
+  };
+  const loadNextModel = (direction = 1) => {
+    const models = currentModels();
+    if (!models.length) return;
+
+    const currentIndex = stateRef.current.currentModelIndex >= 0
+      ? stateRef.current.currentModelIndex
+      : (currentSetDef().defaultModel ?? 0);
+    const nextIndex = (currentIndex + direction + models.length) % models.length;
+    loadModel(nextIndex);
+  };
 
   // ── Effect snapshot ───────────────────────────────────────────────────────────
   // syncEffectSnapshot() is the only way effectSnapshot changes. Calling it
@@ -388,6 +458,7 @@ function MonolithScene() {
   const loadModel = async (index, { showProgressIfUncached = false } = {}) => {
     if (!loaderRef.current || index === stateRef.current.currentModelIndex) return;
     stateRef.current.currentModelIndex = index;
+    rebuildHeatShimmerMeshes();
     syncEffectSnapshot({ triggerGlitch: true });
     gl.domElement.style.opacity = '0';
     overlaysRef.current?.updateTextVisibility(-1);
@@ -582,7 +653,7 @@ function MonolithScene() {
     scene.background = new THREE.Color(0x111111);
     document.body.style.background = '#111111';
 
-    camera.fov = 45;
+    camera.fov = BASE_CAMERA_FOV;
     camera.near = 0.1;
     camera.far = 100;
     camera.position.set(0, 2.5, 14);
@@ -593,6 +664,8 @@ function MonolithScene() {
     gl.toneMappingExposure = 1.4;
     gl.domElement.style.position = 'relative';
     gl.domElement.style.zIndex = '1';
+    gl.domElement.style.touchAction = 'none';
+    gl.domElement.style.webkitTouchCallout = 'none';
     gl.domElement.style.transition = 'opacity 0.6s';
     gl.domElement.style.opacity = '0';
 
@@ -602,6 +675,155 @@ function MonolithScene() {
     controls.update();
     controlsRef.current = controls;
 
+    const touchState = {
+      activePointers: new Map(),
+      longPressTimerId: null,
+      longPressPointerId: null,
+      longPressActive: false,
+      lastTapTime: 0,
+      lastTapX: 0,
+      lastTapY: 0,
+      lastTapClearTimerId: null,
+    };
+
+    const isTouchDevice = () => (
+      window.matchMedia?.('(pointer: coarse)')?.matches || navigator.maxTouchPoints > 0
+    );
+
+    const clearLongPressTimer = () => {
+      if (touchState.longPressTimerId !== null) {
+        window.clearTimeout(touchState.longPressTimerId);
+        touchState.longPressTimerId = null;
+      }
+      touchState.longPressPointerId = null;
+    };
+
+    const clearLastTap = () => {
+      if (touchState.lastTapClearTimerId !== null) {
+        window.clearTimeout(touchState.lastTapClearTimerId);
+        touchState.lastTapClearTimerId = null;
+      }
+      touchState.lastTapTime = 0;
+    };
+
+    const stopTouchBoost = () => {
+      if (!touchState.longPressActive) return;
+      touchState.longPressActive = false;
+      setAnimationSpeedBoost(false);
+    };
+
+    const startLongPressTimer = (pointerId) => {
+      clearLongPressTimer();
+      touchState.longPressPointerId = pointerId;
+      touchState.longPressTimerId = window.setTimeout(() => {
+        const pointer = touchState.activePointers.get(pointerId);
+        if (!pointer || pointer.cancelled || pointer.moved || touchState.activePointers.size !== 1) {
+          return;
+        }
+
+        touchState.longPressTimerId = null;
+        touchState.longPressPointerId = null;
+        touchState.longPressActive = true;
+        clearLastTap();
+        setAnimationSpeedBoost(true);
+      }, TOUCH_LONG_PRESS_DELAY_MS);
+    };
+
+    const onPointerDown = (event) => {
+      if (!isTouchDevice() || event.pointerType !== 'touch') return;
+
+      const pointerCountBefore = touchState.activePointers.size;
+      touchState.activePointers.set(event.pointerId, {
+        startX: event.clientX,
+        startY: event.clientY,
+        lastX: event.clientX,
+        lastY: event.clientY,
+        moved: false,
+        cancelled: false,
+      });
+
+      if (pointerCountBefore === 0) {
+        startLongPressTimer(event.pointerId);
+        return;
+      }
+
+      clearLongPressTimer();
+      stopTouchBoost();
+      clearLastTap();
+      touchState.activePointers.forEach((pointer) => {
+        pointer.cancelled = true;
+      });
+    };
+
+    const onPointerMove = (event) => {
+      if (!isTouchDevice() || event.pointerType !== 'touch') return;
+
+      const pointer = touchState.activePointers.get(event.pointerId);
+      if (!pointer) return;
+
+      pointer.lastX = event.clientX;
+      pointer.lastY = event.clientY;
+
+      const moveDistance = Math.hypot(
+        pointer.lastX - pointer.startX,
+        pointer.lastY - pointer.startY,
+      );
+
+      if (moveDistance > TOUCH_TAP_MAX_MOVEMENT_PX) {
+        pointer.moved = true;
+        clearLongPressTimer();
+      }
+    };
+
+    const onPointerEnd = (event) => {
+      if (!isTouchDevice() || event.pointerType !== 'touch') return;
+
+      const pointer = touchState.activePointers.get(event.pointerId);
+      if (!pointer) return;
+
+      touchState.activePointers.delete(event.pointerId);
+
+      if (touchState.longPressPointerId === event.pointerId) {
+        clearLongPressTimer();
+      }
+
+      if (touchState.longPressActive) {
+        if (touchState.activePointers.size === 0) {
+          stopTouchBoost();
+        }
+        return;
+      }
+
+      if (pointer.cancelled || pointer.moved || touchState.activePointers.size !== 0) {
+        return;
+      }
+
+      const now = window.performance.now();
+      const tapDistance = Math.hypot(
+        pointer.lastX - touchState.lastTapX,
+        pointer.lastY - touchState.lastTapY,
+      );
+
+      if (
+        touchState.lastTapTime > 0
+        && (now - touchState.lastTapTime) <= TOUCH_DOUBLE_TAP_MAX_DELAY_MS
+        && tapDistance <= TOUCH_DOUBLE_TAP_MAX_DISTANCE_PX
+      ) {
+        clearLastTap();
+        loadNextModel(1);
+        return;
+      }
+
+      clearLastTap();
+      touchState.lastTapX = pointer.lastX;
+      touchState.lastTapY = pointer.lastY;
+      touchState.lastTapTime = now;
+      touchState.lastTapClearTimerId = window.setTimeout(() => {
+        touchState.lastTapClearTimerId = null;
+        touchState.lastTapTime = 0;
+      }, TOUCH_DOUBLE_TAP_MAX_DELAY_MS);
+    };
+
     materialManagerRef.current = createMaterialManager(gl);
 
     scene.add(monolithRef.current);
@@ -609,12 +831,6 @@ function MonolithScene() {
     // Create heat shimmer mesh behind the monolith
     const shimmerGroup = new THREE.Group();
     shimmerGroup.visible = false;
-
-    const shimmerGeoLeft = new THREE.CylinderGeometry(0.2, 0.0, 3.5, 32, 1, true);
-    shimmerGeoLeft.rotateZ(Math.PI / 2); // align along local X axis
-
-    const shimmerGeoRight = new THREE.CylinderGeometry(0.2, 0.0, 3.5, 32, 1, true);
-    shimmerGeoRight.rotateZ(Math.PI / 2);
 
     const shimmerMat = new THREE.ShaderMaterial({
       transparent: true,
@@ -697,13 +913,10 @@ function MonolithScene() {
       `
     });
     
-    const meshLeft = new THREE.Mesh(shimmerGeoLeft, shimmerMat);
-    const meshRight = new THREE.Mesh(shimmerGeoRight, shimmerMat);
-    shimmerGroup.add(meshLeft);
-    shimmerGroup.add(meshRight);
-
     scene.add(shimmerGroup);
     heatShimmerRef.current = shimmerGroup;
+    heatShimmerMaterialRef.current = shimmerMat;
+    rebuildHeatShimmerMeshes();
 
     overlaysRef.current = createOverlays(scene);
 
@@ -777,7 +990,7 @@ function MonolithScene() {
       xrayMode: toggleXrayMode,
     });
 
-  // ── Hotkey handler ────────────────────────────────────────────────────────────────
+    // ── Hotkey handler ────────────────────────────────────────────────────────────────
     // Arrow keys → model navigation within the active set.
     // 6         → toggle white mode.
     // G         → toggle lil-gui debug panel.
@@ -786,22 +999,13 @@ function MonolithScene() {
       if (event.code === 'Space') {
         if (event.repeat || !supportsAnimationSpeedBoost()) return;
         event.preventDefault();
-        stateRef.current.animationSpeedBoostEnabled = true;
-        syncAnimationMixerSpeed();
+        setAnimationSpeedBoost(true);
         return;
       }
 
       if (event.key === 'ArrowRight' || event.key === 'ArrowLeft') {
         event.preventDefault();
-        const models = currentModels();
-        if (!models.length) return;
-
-        const currentIndex = stateRef.current.currentModelIndex >= 0
-          ? stateRef.current.currentModelIndex
-          : (currentSetDef().defaultModel ?? 0);
-        const direction = event.key === 'ArrowRight' ? 1 : -1;
-        const nextIndex = (currentIndex + direction + models.length) % models.length;
-        loadModel(nextIndex);
+        loadNextModel(event.key === 'ArrowRight' ? 1 : -1);
         return;
       }
 
@@ -822,12 +1026,15 @@ function MonolithScene() {
 
     const onKeyUp = (event) => {
       if (event.code !== 'Space' || !supportsAnimationSpeedBoost()) return;
-      stateRef.current.animationSpeedBoostEnabled = false;
-      syncAnimationMixerSpeed();
+      setAnimationSpeedBoost(false);
     };
 
     window.addEventListener('keydown', onKeyDown);
     window.addEventListener('keyup', onKeyUp);
+    gl.domElement.addEventListener('pointerdown', onPointerDown);
+    gl.domElement.addEventListener('pointermove', onPointerMove);
+    gl.domElement.addEventListener('pointerup', onPointerEnd);
+    gl.domElement.addEventListener('pointercancel', onPointerEnd);
 
     loadDefaultModel();
     syncEffectSnapshot();
@@ -836,6 +1043,14 @@ function MonolithScene() {
     return () => {
       window.removeEventListener('keydown', onKeyDown);
       window.removeEventListener('keyup', onKeyUp);
+      gl.domElement.removeEventListener('pointerdown', onPointerDown);
+      gl.domElement.removeEventListener('pointermove', onPointerMove);
+      gl.domElement.removeEventListener('pointerup', onPointerEnd);
+      gl.domElement.removeEventListener('pointercancel', onPointerEnd);
+      clearLongPressTimer();
+      clearLastTap();
+      stopTouchBoost();
+      touchState.activePointers.clear();
       controls.dispose();
       guiControlsRef.current?.destroy();
       uiRef.current?.destroy();
@@ -846,10 +1061,9 @@ function MonolithScene() {
         scene.remove(heatShimmerRef.current);
         heatShimmerRef.current.children.forEach((child) => {
           child.geometry.dispose();
-          // The material is shared so this disposes it twice, but Three handles it safely
-          child.material.dispose();
         });
       }
+      heatShimmerMaterialRef.current?.dispose();
       scene.environment = null;
       scene.background = null;
       dracoLoader.dispose();
@@ -861,18 +1075,54 @@ function MonolithScene() {
 
   useFrame((_, delta) => {
     const elapsed = clockRef.current.getElapsedTime();
+    const boostVisualState = boostVisualStateRef.current;
+    const boostShakeOffset = boostVisualState.lastShakeOffset;
+    const boostTarget = (
+      supportsAnimationSpeedBoost() && stateRef.current.animationSpeedBoostEnabled
+    ) ? 1 : 0;
+
+    if (boostShakeOffset.lengthSq() > 0) {
+      camera.position.sub(boostShakeOffset);
+      boostShakeOffset.set(0, 0, 0);
+    }
 
     controlsRef.current?.update();
     mixerRef.current?.update(delta);
     materialManagerRef.current?.updateXrayAnimation(elapsed);
 
-    if (heatShimmerRef.current && heatShimmerRef.current.children.length === 2) {
-      const isEligibleModel = stateRef.current.currentModelIndex === 0 || stateRef.current.currentModelIndex === 1;
-      const isBoosting = isEligibleModel && stateRef.current.animationSpeedBoostEnabled && supportsAnimationSpeedBoost();
-      
-      const leftMesh = heatShimmerRef.current.children[0];
-      const rightMesh = heatShimmerRef.current.children[1];
-      const mat = leftMesh.material;
+    boostVisualState.intensity = THREE.MathUtils.lerp(
+      boostVisualState.intensity,
+      boostTarget,
+      delta * BOOST_SHAKE_LERP_SPEED,
+    );
+
+    const targetFov = THREE.MathUtils.lerp(
+      BASE_CAMERA_FOV,
+      BOOST_CAMERA_FOV,
+      boostVisualState.intensity,
+    );
+    camera.fov = THREE.MathUtils.lerp(camera.fov, targetFov, delta * BOOST_FOV_LERP_SPEED);
+    camera.updateProjectionMatrix();
+
+    if (boostVisualState.intensity > 0.001) {
+      boostShakeOffset.set(
+        (Math.sin(elapsed * 23.0) + Math.sin(elapsed * 41.0 + 0.8)) * BOOST_SHAKE_X_AMPLITUDE * boostVisualState.intensity,
+        (Math.sin(elapsed * 31.0 + 1.2) + Math.sin(elapsed * 53.0)) * BOOST_SHAKE_Y_AMPLITUDE * boostVisualState.intensity,
+        (Math.sin(elapsed * 19.0 + 0.3) + Math.sin(elapsed * 47.0 + 2.4)) * BOOST_SHAKE_Z_AMPLITUDE * boostVisualState.intensity,
+      );
+      camera.position.add(boostShakeOffset);
+    }
+
+    if (heatShimmerRef.current && heatShimmerRef.current.children.length > 0) {
+      const engineShimmers = getCurrentEngineShimmers();
+      const isBoosting = (
+        engineShimmers.length > 0
+        && stateRef.current.animationSpeedBoostEnabled
+        && supportsAnimationSpeedBoost()
+      );
+
+      const firstMesh = heatShimmerRef.current.children[0];
+      const mat = firstMesh.material;
       
       const currentIntensity = mat.uniforms.boostIntensity.value;
       const targetIntensity = isBoosting ? 1.0 : 0.0;
@@ -881,17 +1131,12 @@ function MonolithScene() {
       mat.uniforms.time.value = elapsed;
       
       heatShimmerRef.current.visible = mat.uniforms.boostIntensity.value > 0.01;
-      
-      leftMesh.position.set(
-        guiParamsRef.current.shimmerOffsetX,
-        guiParamsRef.current.shimmerOffsetY,
-        guiParamsRef.current.shimmerOffsetZ
-      );
-      rightMesh.position.set(
-        guiParamsRef.current.shimmerOffsetX,
-        guiParamsRef.current.shimmerOffsetY,
-        -guiParamsRef.current.shimmerOffsetZ
-      );
+
+      heatShimmerRef.current.children.forEach((mesh, index) => {
+        const shimmer = engineShimmers[index];
+        if (!shimmer) return;
+        mesh.position.set(shimmer.x, shimmer.y, shimmer.z);
+      });
       
       if (monolithRef.current) {
         heatShimmerRef.current.position.copy(monolithRef.current.position);

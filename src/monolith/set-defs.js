@@ -4,8 +4,24 @@
 
 export const MODEL_SET_DEF = {
   models: [
-    { key: '1', name: 'SR-71', path: '/set3/Meshy_AI_sr71_0404124235_texture.glb' },
-    { key: '2', name: 'Concorde', path: '/set3/Meshy_AI_Concorde_in_Flight_ov_0404140408_texture.glb' },
+    {
+      key: '1',
+      name: 'SR-71',
+      path: '/set3/Meshy_AI_sr71_0404124235_texture.glb',
+      engineShimmers: [
+        { x: 6.13, y: 0.41, z: 1.4 },
+        { x: 6.13, y: 0.41, z: -1.26 },
+      ],
+    },
+    {
+      key: '2',
+      name: 'Concorde',
+      path: '/set3/Meshy_AI_Concorde_in_Flight_ov_0404140408_texture.glb',
+      engineShimmers: [
+        { x: 6.13, y: 0.41, z: 1.4 },
+        { x: 6.13, y: 0.41, z: -1.26 },
+      ],
+    },
     { key: '3', name: 'F-16', path: '/set3/Meshy_AI_Desert_Thunder_0404141103_texture.glb' },
     { key: '4', name: 'F-35', path: '/set3/Meshy_AI_F_22_Raptor_in_flight_0404140400_texture.glb' },
     { key: '5', name: 'F/A-18 Super Hornet', path: '/set3/Meshy_AI_F_A_18_Hornet_in_Flig_0404140344_texture.glb' },
