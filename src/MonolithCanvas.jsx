@@ -66,7 +66,7 @@ const TERRAIN_ENABLED = false;
 const ELEVATION_SPEED = 5.5;
 const ELEVATION_LERP_SPEED = 5.5;
 const ELEVATION_MIN_OFFSET = -3.5;
-const ELEVATION_MAX_OFFSET = 5.5;
+const ELEVATION_MAX_OFFSET = 28.0;
 const ELEVATION_PITCH_MAX = 0.2;
 const ELEVATION_PITCH_LERP_SPEED = 6.5;
 const TERRAIN_TILE_COUNT = 3;
@@ -407,6 +407,7 @@ function createSkyDome() {
     depthWrite: false,
     uniforms: {
       time: { value: 0 },
+      yaw: { value: 0 },
     },
     vertexShader: `
       varying vec3 vDirection;
@@ -418,6 +419,7 @@ function createSkyDome() {
     `,
     fragmentShader: `
       uniform float time;
+      uniform float yaw;
       varying vec3 vDirection;
 
       float hash(vec3 p) {
@@ -498,29 +500,32 @@ function createSkyDome() {
 
         // ── Sun disc + glow ─────────────────────────────────────────
         vec3 sunDir = normalize(vec3(-0.55, 0.06, -1.0));
-        float sunAngle = max(dot(dir, sunDir), 0.0);
+        float sunDot = dot(dir, sunDir);
+        float sunAngle = max(sunDot, 0.0);
 
-        // Bright core
-        float sunDisc = smoothstep(0.9985, 0.9995, sunAngle);
-        vec3 sunColor = vec3(1.0, 0.85, 0.5);
-        base += sunColor * sunDisc * 3.0;
+        // Bright white core
+        float sunDisc = smoothstep(0.9980, 0.9994, sunAngle);
+        base += vec3(1.0, 0.95, 0.8) * sunDisc * 6.0;
 
-        // Soft glow halo
-        float sunGlow = pow(sunAngle, 48.0);
-        base += vec3(0.9, 0.4, 0.15) * sunGlow * 0.8;
+        // Inner glow — yellowish-white
+        float sunGlow = pow(sunAngle, 32.0);
+        base += vec3(1.0, 0.7, 0.3) * sunGlow * 1.8;
+
+        // Mid glow
+        float sunMid = pow(sunAngle, 12.0);
+        base += vec3(0.9, 0.45, 0.12) * sunMid * 0.7;
 
         // Wide warm wash
-        float sunWash = pow(sunAngle, 8.0);
-        base += vec3(0.5, 0.15, 0.06) * sunWash * 0.35;
+        float sunWash = pow(sunAngle, 5.0);
+        base += vec3(0.5, 0.18, 0.05) * sunWash * 0.4;
 
         // ── God rays (crepuscular rays) ─────────────────────────────
-        // Project direction onto a 2D plane perpendicular to the sun
-        // to create angular ray pattern
         float cloudOcclusion = wisps + cloudLayer * 0.7 + highClouds * 0.5;
 
-        // Angular coordinate around sun direction for ray pattern
-        vec3 toSun = dir - sunDir * dot(dir, sunDir);
-        float rayAngle = atan(toSun.y, toSun.x);
+        // Guard against zero-length toSun (when dir == sunDir)
+        vec3 toSun = dir - sunDir * sunDot;
+        float toSunLen = length(toSun);
+        float rayAngle = toSunLen > 0.001 ? atan(toSun.y, toSun.x) : 0.0;
 
         // Multiple overlapping ray frequencies for natural look
         float rays = 0.0;
@@ -653,6 +658,7 @@ function createOcean() {
     uniforms: {
       time: { value: 0 },
       scrollOffset: { value: 0 },
+      yaw: { value: 0 },
       cameraPos: { value: new THREE.Vector3() },
     },
     vertexShader: `
@@ -669,6 +675,7 @@ function createOcean() {
     fragmentShader: `
       uniform float time;
       uniform float scrollOffset;
+      uniform float yaw;
       uniform vec3 cameraPos;
       varying vec3 vWorldPos;
       varying vec2 vUv;
@@ -713,7 +720,6 @@ function createOcean() {
         float fresnel = pow(1.0 - max(dot(viewDir, waveNormal), 0.0), 2.5);
         fresnel = mix(0.25, 1.0, fresnel);
 
-        // Sun direction (low on horizon, matching sunset)
         vec3 sunDir = normalize(vec3(-0.55, 0.08, -1.0));
 
         // Specular highlight from sun
@@ -901,9 +907,15 @@ function MonolithScene() {
   const flightControlRef = useRef({
     ascendPressed: false,
     descendPressed: false,
+    turnLeftPressed: false,
+    turnRightPressed: false,
     elevationOffset: 0,
     targetElevationOffset: 0,
     pitchOffset: 0,
+    yawOffset: 0,
+    targetYawOffset: 0,
+    bankOffset: 0,
+    worldYaw: 0,
   });
   const stateRef = useRef(createInitialMonolithState());
   const boostVisualStateRef = useRef({
@@ -952,7 +964,7 @@ function MonolithScene() {
     shimmerGroup.clear();
 
     shimmerConfigs.forEach(() => {
-      const geometry = new THREE.CylinderGeometry(0.2, 0.0, 3.5, 32, 1, true);
+      const geometry = new THREE.CylinderGeometry(0.3, 0.0, 4.5, 32, 16, true);
       geometry.rotateZ(Math.PI / 2);
       shimmerGroup.add(new THREE.Mesh(geometry, heatShimmerMaterialRef.current));
     });
@@ -1095,8 +1107,8 @@ function MonolithScene() {
     monolithRef.current.position.y += flightControlRef.current.elevationOffset;
     monolithRef.current.rotation.set(
       guiParamsRef.current.modelRotationX,
-      guiParamsRef.current.modelRotationY,
-      guiParamsRef.current.modelRotationZ + flightControlRef.current.pitchOffset,
+      guiParamsRef.current.modelRotationY + flightControlRef.current.yawOffset,
+      guiParamsRef.current.modelRotationZ + flightControlRef.current.pitchOffset + flightControlRef.current.bankOffset,
     );
   };
 
@@ -1630,15 +1642,16 @@ function MonolithScene() {
     const shimmerGroup = new THREE.Group();
     shimmerGroup.visible = false;
 
-    const shimmerGeoLeft = new THREE.CylinderGeometry(0.2, 0.0, 3.5, 32, 1, true);
-    shimmerGeoLeft.rotateZ(Math.PI / 2); // align along local X axis
+    const shimmerGeoLeft = new THREE.CylinderGeometry(0.3, 0.0, 4.5, 32, 16, true);
+    shimmerGeoLeft.rotateZ(Math.PI / 2);
 
-    const shimmerGeoRight = new THREE.CylinderGeometry(0.2, 0.0, 3.5, 32, 1, true);
+    const shimmerGeoRight = new THREE.CylinderGeometry(0.3, 0.0, 4.5, 32, 16, true);
     shimmerGeoRight.rotateZ(Math.PI / 2);
 
     const shimmerMat = new THREE.ShaderMaterial({
       transparent: true,
       depthWrite: false,
+      side: THREE.DoubleSide,
       blending: THREE.AdditiveBlending,
       uniforms: {
         time: { value: 0 },
@@ -1648,32 +1661,43 @@ function MonolithScene() {
         uniform float time;
         uniform float boostIntensity;
         varying vec2 vUv;
-        
+        varying float vDisplacement;
+
         float hash(vec2 p) { return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453); }
         float noise(vec2 p) {
           vec2 i = floor(p); vec2 f = fract(p);
           vec2 u = f * f * (3.0 - 2.0 * f);
-          return mix(mix(hash(i + vec2(0.0,0.0)), hash(i + vec2(1.0,0.0)), u.x),
+          return mix(mix(hash(i), hash(i + vec2(1.0,0.0)), u.x),
                      mix(hash(i + vec2(0.0,1.0)), hash(i + vec2(1.0,1.0)), u.x), u.y);
         }
 
         void main() {
           vUv = uv;
           vec3 pos = position;
-          
-          // Anchor the effect: zero displacement at base (vUv.y == 1), max at the tip
-          float tailFade = 1.0 - vUv.y;
-          
-          float ny = noise(vec2(vUv.x * 5.0, time * 15.0)) - 0.5;
-          float nz = noise(vec2(vUv.x * 5.0 + 100.0, time * 15.0)) - 0.5;
-          float nx = noise(vec2(time * 20.0, 0.0)) - 0.5;
-          
-          // Add turbulent rippling to the cone profile
-          pos.y += ny * 0.15 * boostIntensity * tailFade;
-          pos.z += nz * 0.15 * boostIntensity * tailFade;
-          // Pulse the length of the flame slightly
-          pos.x += nx * 0.3 * boostIntensity * tailFade;
 
+          float tailFade = 1.0 - vUv.y;
+
+          // Multi-frequency turbulence for chaotic flame shape
+          float n1 = noise(vec2(vUv.x * 6.0 + time * 12.0, vUv.y * 4.0 + time * 18.0)) - 0.5;
+          float n2 = noise(vec2(vUv.x * 12.0 - time * 8.0, vUv.y * 8.0 + time * 25.0)) - 0.5;
+          float n3 = noise(vec2(vUv.x * 3.0, time * 22.0)) - 0.5;
+          float n4 = noise(vec2(vUv.y * 10.0 + time * 30.0, vUv.x * 8.0)) - 0.5;
+
+          // Large-scale flame licking motion
+          float lick = sin(vUv.y * 6.28 + time * 10.0) * 0.08;
+
+          // Flame widens and narrows chaotically
+          float flicker = 1.0 + n3 * 0.4 * boostIntensity;
+          pos.y *= flicker;
+          pos.z *= flicker;
+
+          // Turbulent displacement increases toward the tail
+          float turb = tailFade * tailFade;
+          pos.y += (n1 * 0.25 + n2 * 0.12 + lick) * boostIntensity * turb;
+          pos.z += (n4 * 0.2 + n2 * 0.1) * boostIntensity * turb;
+          pos.x += n3 * 0.5 * boostIntensity * turb;
+
+          vDisplacement = abs(n1) + abs(n2) * 0.5;
           gl_Position = projectionMatrix * modelViewMatrix * vec4(pos, 1.0);
         }
       `,
@@ -1681,38 +1705,65 @@ function MonolithScene() {
         uniform float time;
         uniform float boostIntensity;
         varying vec2 vUv;
-        
-        // Simple 2D noise
+        varying float vDisplacement;
+
         float hash(vec2 p) { return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453); }
         float noise(vec2 p) {
           vec2 i = floor(p); vec2 f = fract(p);
           vec2 u = f * f * (3.0 - 2.0 * f);
-          return mix(mix(hash(i + vec2(0.0,0.0)), hash(i + vec2(1.0,0.0)), u.x),
+          return mix(mix(hash(i), hash(i + vec2(1.0,0.0)), u.x),
                      mix(hash(i + vec2(0.0,1.0)), hash(i + vec2(1.0,1.0)), u.x), u.y);
         }
-        
+
         void main() {
           if (boostIntensity < 0.01) discard;
-          
-          // Scroll noise along V (z-axis of cylinder)
-          vec2 uv1 = vec2(vUv.x * 4.0, vUv.y * 3.0 - time * 5.0);
-          vec2 uv2 = vec2(vUv.x * 3.0 - time * 2.0, vUv.y * 5.0 - time * 8.0);
-          
-          float n = noise(uv1) * 0.5 + noise(uv2) * 0.5;
-          
-          // Fade edges less aggressively
+
+          // Fast-scrolling noise at multiple scales for flame detail
+          float n1 = noise(vec2(vUv.x * 5.0, vUv.y * 4.0 - time * 8.0));
+          float n2 = noise(vec2(vUv.x * 10.0 + 50.0, vUv.y * 8.0 - time * 14.0));
+          float n3 = noise(vec2(vUv.x * 20.0, vUv.y * 12.0 - time * 20.0));
+          float n = n1 * 0.5 + n2 * 0.3 + n3 * 0.2;
+
+          // Shape: rounded edge with noise-driven tearing
           float edge = sin(vUv.x * 3.14159);
-          float distFade = pow(1.0 - vUv.y, 0.6); // Stays visible further down the tail
-          
-          // Increase baseline intensity
-          float intensity = n * edge * distFade * boostIntensity;
-          
-          // Make it redder with a hot yellow core
-          vec3 color = mix(vec3(1.0, 0.0, 0.0), vec3(1.0, 0.3, 0.0), n); // Deep red / bright orange
-          color = mix(color, vec3(1.0, 0.8, 0.2), pow(n, 3.0)); // Yellow/white hot core
-          
-          // Boost visibility multiplier
-          gl_FragColor = vec4(color * intensity * 4.0, intensity * 2.0);
+          edge = pow(edge, 0.6); // Wider flame body
+          float tearNoise = noise(vec2(vUv.x * 8.0 + time * 6.0, vUv.y * 3.0));
+          edge *= smoothstep(0.15, 0.35, edge + tearNoise * 0.2); // Ragged edges
+
+          // Tail fade — sharp near engine, long taper
+          float tailFade = pow(1.0 - vUv.y, 0.4);
+          // Flickering tail tip
+          float tipFlicker = noise(vec2(time * 18.0, vUv.x * 4.0));
+          tailFade *= smoothstep(0.0, 0.15 + tipFlicker * 0.1, 1.0 - vUv.y);
+
+          float intensity = n * edge * tailFade * boostIntensity;
+
+          // Flame color gradient: blue core → white hot → orange → red tips
+          float coreT = smoothstep(0.0, 0.3, vUv.y); // 0 at tip, 1 near engine
+          vec3 tipColor = vec3(1.0, 0.12, 0.0);                // Deep red tips
+          vec3 midColor = vec3(1.0, 0.45, 0.02);               // Rich orange
+          vec3 hotColor = vec3(1.0, 0.7, 0.1);                 // Orange-yellow (not white)
+          vec3 coreColor = vec3(1.0, 0.6, 0.15);               // Bright orange core
+
+          vec3 color = mix(tipColor, midColor, smoothstep(0.0, 0.3, coreT));
+          color = mix(color, hotColor, smoothstep(0.3, 0.7, coreT));
+          color = mix(color, coreColor, smoothstep(0.82, 1.0, coreT));
+
+          // Noise drives local hot spots — orange not white
+          color = mix(color, hotColor, pow(n, 2.5) * 0.5);
+
+          // Red at the tip (low coreT = toward tip)
+          vec3 redHighlight = vec3(0.9, 0.05, 0.0);
+          color = mix(color, redHighlight, pow(1.0 - coreT, 2.5) * 0.75);
+
+          // Red on the edges (where edge envelope is low)
+          float edgeness = 1.0 - smoothstep(0.0, 0.45, edge);
+          color = mix(color, redHighlight, edgeness * 0.6 * tailFade);
+
+          // Displacement from vertex shader adds brightness variation
+          color += vec3(0.3, 0.15, 0.0) * vDisplacement * 0.5;
+
+          gl_FragColor = vec4(color * intensity * 5.0, intensity * 2.5);
         }
       `
     });
@@ -1811,7 +1862,11 @@ function MonolithScene() {
 
       if (event.key === 'ArrowRight' || event.key === 'ArrowLeft') {
         event.preventDefault();
-        loadNextModel(event.key === 'ArrowRight' ? 1 : -1);
+        if (event.key === 'ArrowRight') {
+          flightControlRef.current.turnRightPressed = true;
+        } else {
+          flightControlRef.current.turnLeftPressed = true;
+        }
         return;
       }
 
@@ -1822,6 +1877,16 @@ function MonolithScene() {
         } else {
           flightControlRef.current.descendPressed = true;
         }
+        return;
+      }
+
+      if (event.key === 'z' || event.key === 'Z') {
+        loadNextModel(-1);
+        return;
+      }
+
+      if (event.key === 'x' || event.key === 'X') {
+        loadNextModel(1);
         return;
       }
 
@@ -1853,6 +1918,16 @@ function MonolithScene() {
 
       if (event.key === 'ArrowDown') {
         flightControlRef.current.descendPressed = false;
+        return;
+      }
+
+      if (event.key === 'ArrowLeft') {
+        flightControlRef.current.turnLeftPressed = false;
+        return;
+      }
+
+      if (event.key === 'ArrowRight') {
+        flightControlRef.current.turnRightPressed = false;
       }
     };
 
@@ -1939,6 +2014,22 @@ function MonolithScene() {
       boostShakeOffset.set(0, 0, 0);
     }
 
+    // Camera follows plane yaw — orbit around the plane keeping it centered
+    const planePos = monolithRef.current?.position ?? new THREE.Vector3();
+    const camRadius = 14;
+    const camBaseY = 5.0;
+    const worldYaw = flightControlRef.current.worldYaw;
+    const targetCamX = planePos.x + Math.sin(worldYaw) * camRadius;
+    const targetCamZ = planePos.z + Math.cos(worldYaw) * camRadius;
+    const targetCamY = planePos.y + camBaseY;
+    camera.position.x = THREE.MathUtils.lerp(camera.position.x, targetCamX, delta * 6);
+    camera.position.z = THREE.MathUtils.lerp(camera.position.z, targetCamZ, delta * 6);
+    camera.position.y = THREE.MathUtils.lerp(camera.position.y, targetCamY, delta * 4);
+
+    const targetLookY = planePos.y + 2.5;
+    controlsRef.current.target.x = THREE.MathUtils.lerp(controlsRef.current.target.x, planePos.x, delta * 6);
+    controlsRef.current.target.z = THREE.MathUtils.lerp(controlsRef.current.target.z, planePos.z, delta * 6);
+    controlsRef.current.target.y = THREE.MathUtils.lerp(controlsRef.current.target.y, targetLookY, delta * 4);
     controlsRef.current?.update();
     mixerRef.current?.update(delta);
     materialManagerRef.current?.updateXrayAnimation(elapsed);
@@ -1971,6 +2062,17 @@ function MonolithScene() {
       -elevationDirection * ELEVATION_PITCH_MAX,
       delta * ELEVATION_PITCH_LERP_SPEED,
     );
+
+    const turnDirection = Number(flightControl.turnRightPressed) - Number(flightControl.turnLeftPressed);
+
+    // worldYaw accumulates freely — drives sky/ocean so sun can be placed anywhere
+    flightControl.worldYaw += turnDirection * 1.4 * delta;
+
+    // Plane model yaw: small transient lean, returns to neutral on release
+    flightControl.targetYawOffset = turnDirection * 0.18;
+    flightControl.yawOffset = THREE.MathUtils.lerp(flightControl.yawOffset, flightControl.targetYawOffset, delta * 5);
+    flightControl.bankOffset = THREE.MathUtils.lerp(flightControl.bankOffset, -turnDirection * 0.38, delta * 5);
+
     applyMonolithTransform();
 
     const targetExposure = guiParamsRef.current.exposure * (
@@ -2002,12 +2104,14 @@ function MonolithScene() {
     if (skyDomeRef.current) {
       skyDomeRef.current.position.copy(camera.position);
       skyDomeRef.current.material.uniforms.time.value = elapsed;
+      skyDomeRef.current.material.uniforms.yaw.value = flightControlRef.current.worldYaw;
     }
 
     if (OCEAN_ENABLED && oceanRef.current) {
       const oceanSpeed = CLOUD_SCROLL_SPEED * (1 + boostVisualState.intensity * 1.8);
       oceanRef.current.material.uniforms.scrollOffset.value += oceanSpeed * delta;
       oceanRef.current.material.uniforms.time.value = elapsed;
+      oceanRef.current.material.uniforms.yaw.value = flightControlRef.current.worldYaw;
       oceanRef.current.material.uniforms.cameraPos.value.copy(camera.position);
     }
 
