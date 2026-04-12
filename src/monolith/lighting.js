@@ -25,14 +25,19 @@ export function createLightingRig({ scene, currentSetDef, getCurrentModelIndex, 
   const ambient = new THREE.AmbientLight(0xffffff, 0);
   scene.add(ambient);
 
+  const PARTICLE_RANGE_X = 140;
+  const PARTICLE_RANGE_Z = 200;
+  const PARTICLE_TOP_Y = 32;
+  const PARTICLE_BOTTOM_Y = -5;
+
   const particleCount = 5000;
   const particleGeo = new THREE.BufferGeometry();
   const particlePositions = new Float32Array(particleCount * 3);
   const velocities = new Float32Array(particleCount);
   for (let i = 0; i < particleCount; i++) {
-    particlePositions[i * 3] = (Math.random() - 0.5) * 30;
-    particlePositions[i * 3 + 1] = Math.random() * 25;
-    particlePositions[i * 3 + 2] = (Math.random() - 0.5) * 30;
+    particlePositions[i * 3] = (Math.random() - 0.5) * PARTICLE_RANGE_X;
+    particlePositions[i * 3 + 1] = PARTICLE_BOTTOM_Y + Math.random() * (PARTICLE_TOP_Y - PARTICLE_BOTTOM_Y);
+    particlePositions[i * 3 + 2] = (Math.random() - 0.5) * PARTICLE_RANGE_Z;
     velocities[i] = 0.01 + Math.random() * 0.03;
   }
   const particleColors = new Float32Array(particleCount * 3);
@@ -124,10 +129,6 @@ export function createLightingRig({ scene, currentSetDef, getCurrentModelIndex, 
   }
 
   // ── Scene lights (Lighting mode A) ─────────────────────────────────────────
-  // These are all created up front and selectively activated by the style
-  // functions in sceneLightingEffects. resetAllLights() zeros their intensities
-  // at the top of every updateSceneLighting() call so the active style has a
-  // clean starting state each frame.
   const ringGeometry = new THREE.TorusGeometry(3, 0.05, 8, 64);
   const ringMaterial = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.8 });
   const ringMesh = new THREE.Mesh(ringGeometry, ringMaterial);
@@ -303,19 +304,19 @@ export function createLightingRig({ scene, currentSetDef, getCurrentModelIndex, 
 
     for (let i = 0; i < particleCount; i++) {
         if (isBoosting) {
-          positions[i * 3 + 2] += velocities[i] * 40.0; // Fast wind along Z axis
-          if (positions[i * 3 + 2] > 25) { // Reset Z when passing camera
-            positions[i * 3 + 2] = -50;
-            positions[i * 3 + 1] = (Math.random() - 0.5) * 30;
-            positions[i * 3] = (Math.random() - 0.5) * 50;
+          positions[i * 3 + 2] += velocities[i] * 50.0; // Fast wind along Z axis
+          if (positions[i * 3 + 2] > 25) { 
+            positions[i * 3 + 2] = -80;
+            positions[i * 3 + 1] = PARTICLE_BOTTOM_Y + Math.random() * (PARTICLE_TOP_Y - PARTICLE_BOTTOM_Y);
+            positions[i * 3] = (Math.random() - 0.5) * PARTICLE_RANGE_X;
           }
         } else {
           positions[i * 3 + 1] -= velocities[i];
           positions[i * 3] += Math.sin(nowMs * 0.001 + i) * 0.002;
-          if (positions[i * 3 + 1] < -1) {
-            positions[i * 3 + 1] = 25;
-            positions[i * 3] = (Math.random() - 0.5) * 30;
-            positions[i * 3 + 2] = (Math.random() - 0.5) * 50;
+          if (positions[i * 3 + 1] < PARTICLE_BOTTOM_Y) {
+            positions[i * 3 + 1] = PARTICLE_TOP_Y;
+            positions[i * 3] = (Math.random() - 0.5) * PARTICLE_RANGE_X;
+            positions[i * 3 + 2] = (Math.random() - 0.5) * PARTICLE_RANGE_Z;
           }
       }
     }

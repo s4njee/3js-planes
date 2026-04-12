@@ -50,12 +50,13 @@ const BOOST_SHAKE_Z_AMPLITUDE = 0.05;
 const BASE_SCENE_BACKGROUND = 0x050709;
 const SKY_DOME_RADIUS = 90;
 const CINEMATIC_EXPOSURE_MULTIPLIER = 0.58;
-const CLOUDS_ENABLED = false;
+const CLOUDS_ENABLED = true;
 const CLOUD_LAYER_COUNT = 5;
-const CLOUDS_PER_LAYER = 20;
+const CLOUDS_PER_LAYER = 40;
 const CLOUD_SCROLL_SPEED = 9;
-const CLOUD_FIELD_WIDTH = 95;
-const CLOUD_FIELD_DEPTH = 180;
+const CLOUD_FIELD_BASE_Y = 24.0;
+const CLOUD_FIELD_WIDTH = 120;
+const CLOUD_FIELD_DEPTH = 220;
 const CLOUD_FIELD_HEIGHT = 26;
 const CLOUD_AMBIENT_MIN_FACTOR = 0.58;
 const OCEAN_ENABLED = true;
@@ -460,8 +461,15 @@ function createSkyDome() {
         return value;
       }
 
+      vec3 rotateY(vec3 v, float angle) {
+        float s = sin(angle);
+        float c = cos(angle);
+        return vec3(v.x * c + v.z * s, v.y, -v.x * s + v.z * c);
+      }
+
       void main() {
         vec3 dir = normalize(vDirection);
+        dir = rotateY(dir, yaw);
         float horizon = clamp((dir.y + 0.22) * 0.9, 0.0, 1.0);
 
         vec3 zenith = vec3(0.02, 0.04, 0.14);
@@ -605,7 +613,7 @@ function createCloudTexture() {
 
 function randomizeCloudSprite(sprite, layerIndex, depth = null) {
   const layerT = CLOUD_LAYER_COUNT <= 1 ? 0.5 : layerIndex / (CLOUD_LAYER_COUNT - 1);
-  const layerCenterY = THREE.MathUtils.lerp(-(CLOUD_FIELD_HEIGHT * 0.5), CLOUD_FIELD_HEIGHT * 0.5, layerT);
+  const layerCenterY = CLOUD_FIELD_BASE_Y + THREE.MathUtils.lerp(-(CLOUD_FIELD_HEIGHT * 0.5), CLOUD_FIELD_HEIGHT * 0.5, layerT);
   const distanceFromMid = Math.abs(layerT - 0.5) * 2;
   const scale = 11 + Math.random() * 14 + ((1 - distanceFromMid) * 2.2);
   sprite.position.set(
@@ -646,6 +654,43 @@ function createCloudField() {
 
   group.userData.texture = texture;
   return group;
+}
+
+function createContrails() {
+  const canvas = document.createElement('canvas');
+  canvas.width = 64;
+  canvas.height = 64;
+  const ctx = canvas.getContext('2d');
+  
+  if (ctx) {
+    const gradient = ctx.createRadialGradient(32, 32, 0, 32, 32, 32);
+    gradient.addColorStop(0, 'rgba(255, 255, 255, 0.45)');
+    gradient.addColorStop(1, 'rgba(255, 255, 255, 0)');
+    ctx.fillStyle = gradient;
+    ctx.fillRect(0, 0, 64, 64);
+  }
+  
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  
+  const material = new THREE.SpriteMaterial({
+    map: texture,
+    transparent: true,
+    depthWrite: false,
+    blending: THREE.AdditiveBlending,
+    opacity: 0.8,
+  });
+  
+  const group = new THREE.Group();
+  const particles = [];
+  for (let i = 0; i < 200; i++) {
+    const sprite = new THREE.Sprite(material);
+    sprite.visible = false;
+    group.add(sprite);
+    particles.push({ sprite, life: 0, maxLife: 1.0 });
+  }
+  
+  return { group, particles };
 }
 
 function createOcean() {
@@ -699,10 +744,15 @@ function createOcean() {
         vec3 viewDir = normalize(cameraPos - vWorldPos);
         float dist = length(cameraPos.xz - vWorldPos.xz);
 
-        // Wave normals from scrolling noise — scroll with flight speed
-        vec2 flight = vec2(0.0, -scrollOffset * 0.04);
-        vec2 uv1 = vWorldPos.xz * 0.04 + vec2(time * 0.02, time * 0.015) + flight;
-        vec2 uv2 = vWorldPos.xz * 0.08 + vec2(-time * 0.015, time * 0.01) + flight * 2.0;
+        float s = sin(yaw);
+        float c = cos(yaw);
+        vec2 rotatedPos = vec2(vWorldPos.x * c + vWorldPos.z * s, -vWorldPos.x * s + vWorldPos.z * c);
+
+        // Wave normals from scrolling noise
+        vec2 flightDir = vec2(sin(yaw), -cos(yaw));
+        vec2 flight = flightDir * scrollOffset * 0.04;
+        vec2 uv1 = rotatedPos * 0.04 + vec2(time * 0.02, time * 0.015) + flight;
+        vec2 uv2 = rotatedPos * 0.08 + vec2(-time * 0.015, time * 0.01) + flight * 2.0;
 
         // Two noise layers instead of three FBM calls
         float n1 = noise(uv1) * 0.6 + noise(uv1 * 2.1) * 0.3;
@@ -720,7 +770,10 @@ function createOcean() {
         float fresnel = pow(1.0 - max(dot(viewDir, waveNormal), 0.0), 2.5);
         fresnel = mix(0.25, 1.0, fresnel);
 
-        vec3 sunDir = normalize(vec3(-0.55, 0.08, -1.0));
+        float sunS = sin(-yaw);
+        float sunC = cos(-yaw);
+        vec3 baseSunDir = vec3(-0.55, 0.08, -1.0);
+        vec3 sunDir = normalize(vec3(baseSunDir.x * sunC + baseSunDir.z * sunS, baseSunDir.y, -baseSunDir.x * sunS + baseSunDir.z * sunC));
 
         // Specular highlight from sun
         vec3 halfDir = normalize(viewDir + sunDir);
@@ -903,19 +956,27 @@ function MonolithScene() {
     density: 0,
     ambientFactor: 1,
   });
+  const contrailsRef = useRef(null);
+  const contrailStateRef = useRef({
+    leftSpawnTimer: 0,
+    rightSpawnTimer: 0,
+    particleIndex: 0,
+    lastWorldYaw: 0,
+  });
   const terrainTilesRef = useRef([]);
   const flightControlRef = useRef({
     ascendPressed: false,
     descendPressed: false,
     turnLeftPressed: false,
     turnRightPressed: false,
-    elevationOffset: 0,
-    targetElevationOffset: 0,
+    elevationOffset: ELEVATION_MIN_OFFSET,
+    targetElevationOffset: ELEVATION_MIN_OFFSET,
     pitchOffset: 0,
     yawOffset: 0,
     targetYawOffset: 0,
     bankOffset: 0,
     worldYaw: 0,
+    lastWorldYaw: 0,
   });
   const stateRef = useRef(createInitialMonolithState());
   const boostVisualStateRef = useRef({
@@ -1105,11 +1166,20 @@ function MonolithScene() {
 
     monolithRef.current.position.copy(monolithBasePositionRef.current);
     monolithRef.current.position.y += flightControlRef.current.elevationOffset;
+    // Apply base GUI rotation first
     monolithRef.current.rotation.set(
       guiParamsRef.current.modelRotationX,
-      guiParamsRef.current.modelRotationY + flightControlRef.current.yawOffset,
-      guiParamsRef.current.modelRotationZ + flightControlRef.current.pitchOffset + flightControlRef.current.bankOffset,
+      guiParamsRef.current.modelRotationY,
+      guiParamsRef.current.modelRotationZ
     );
+    
+    // Apply flight offsets independently in local object space to avoid Gimbal Lock.
+    // Native X is the nose-to-tail axis -> Roll/Bank.
+    // Native Z is the wing-to-wing axis -> Pitch.
+    // Native Y is the vertical axis -> Yaw.
+    monolithRef.current.rotateX(-flightControlRef.current.bankOffset);
+    monolithRef.current.rotateY(-flightControlRef.current.yawOffset);
+    monolithRef.current.rotateZ(flightControlRef.current.pitchOffset);
   };
 
   const swapModel = (model, name, animations) => {
@@ -1454,6 +1524,9 @@ function MonolithScene() {
 
     const controls = new OrbitControls(camera, gl.domElement);
     controls.target.set(0, 5.0, 0);
+    controls.enableRotate = false;
+    controls.enableZoom = false;
+    controls.enablePan = false;
     controls.enableDamping = true;
     controls.update();
     controlsRef.current = controls;
@@ -1620,6 +1693,11 @@ function MonolithScene() {
       scene.add(cloudField);
       cloudFieldRef.current = cloudField;
     }
+
+    const contrails = createContrails();
+    contrailsRef.current = contrails;
+    contrailStateRef.current.lastWorldYaw = flightControlRef.current.worldYaw;
+    scene.add(contrails.group);
 
     if (OCEAN_ENABLED) {
       const ocean = createOcean();
@@ -2018,9 +2096,8 @@ function MonolithScene() {
     const planePos = monolithRef.current?.position ?? new THREE.Vector3();
     const camRadius = 14;
     const camBaseY = 5.0;
-    const worldYaw = flightControlRef.current.worldYaw;
-    const targetCamX = planePos.x + Math.sin(worldYaw) * camRadius;
-    const targetCamZ = planePos.z + Math.cos(worldYaw) * camRadius;
+    const targetCamX = planePos.x;
+    const targetCamZ = planePos.z + camRadius;
     const targetCamY = planePos.y + camBaseY;
     camera.position.x = THREE.MathUtils.lerp(camera.position.x, targetCamX, delta * 6);
     camera.position.z = THREE.MathUtils.lerp(camera.position.z, targetCamZ, delta * 6);
@@ -2063,7 +2140,8 @@ function MonolithScene() {
       delta * ELEVATION_PITCH_LERP_SPEED,
     );
 
-    const turnDirection = Number(flightControl.turnRightPressed) - Number(flightControl.turnLeftPressed);
+    // Background rotation uses turnDirection; currently left must increase yaw to move background right.
+    const turnDirection = Number(flightControl.turnLeftPressed) - Number(flightControl.turnRightPressed);
 
     // worldYaw accumulates freely — drives sky/ocean so sun can be placed anywhere
     flightControl.worldYaw += turnDirection * 1.4 * delta;
@@ -2119,8 +2197,11 @@ function MonolithScene() {
       let densityAccumulator = 0;
       const monolithY = monolithRef.current?.position.y ?? 0;
       const cloudSpeed = CLOUD_SCROLL_SPEED * (1 + boostVisualState.intensity * 1.8);
+      const deltaYaw = flightControl.worldYaw - flightControl.lastWorldYaw;
+      const yAxis = new THREE.Vector3(0, 1, 0);
 
       cloudFieldRef.current.children.forEach((cloud) => {
+        cloud.position.applyAxisAngle(yAxis, -deltaYaw);
         cloud.position.z += cloudSpeed * cloud.userData.scrollSpeed * delta;
         if (cloud.position.z > 22) {
           randomizeCloudSprite(
@@ -2152,6 +2233,73 @@ function MonolithScene() {
       cloudStateRef.current.ambientFactor = THREE.MathUtils.lerp(cloudStateRef.current.ambientFactor, 1, delta * 2.2);
     }
 
+    if (contrailsRef.current) {
+      const contrailSpeed = CLOUD_SCROLL_SPEED * 1.5 * (1 + boostVisualState.intensity * 2.5);
+      const deltaYaw = flightControl.worldYaw - flightControl.lastWorldYaw;
+      const yAxis = new THREE.Vector3(0, 1, 0);
+
+      contrailsRef.current.particles.forEach((p) => {
+        if (p.life > 0) {
+          p.life -= delta;
+          if (p.life <= 0) {
+            p.sprite.visible = false;
+          } else {
+            p.sprite.position.applyAxisAngle(yAxis, -deltaYaw);
+            p.sprite.position.z += contrailSpeed * delta;
+            
+            const lifeProgress = p.life / p.maxLife;
+            p.sprite.scale.setScalar(0.8 + (1 - lifeProgress) * 4.5);
+            p.sprite.material.opacity = Math.pow(lifeProgress, 1.2) * 0.45;
+          }
+        }
+      });
+
+      if (boostVisualState.intensity > 0.01) {
+        contrailStateRef.current.leftSpawnTimer -= delta;
+        contrailStateRef.current.rightSpawnTimer -= delta;
+
+        const spawnParticle = (offsetZ) => {
+          const index = contrailStateRef.current.particleIndex;
+          const p = contrailsRef.current.particles[index];
+          p.life = p.maxLife = 1.0 + Math.random() * 0.6;
+          p.sprite.visible = true;
+
+          if (monolithRef.current) {
+            // Compute true wingtips based on model's physical bounding box
+            if (!monolithRef.current.userData.contrailOffsets) {
+              const box = new THREE.Box3().setFromObject(monolithRef.current);
+              // In world space (due to -90 base Y rot), X is wingspan, Z is length.
+              const wingspan = box.max.x - box.min.x;
+              const length = box.max.z - box.min.z;
+              monolithRef.current.userData.contrailOffsets = {
+                halfSpan: wingspan * 0.45, // 90% of half-span to be right at the tips
+                sweepBack: length * 0.25, // trailing edge estimation
+              };
+            }
+            const offsets = monolithRef.current.userData.contrailOffsets;
+            const sign = offsetZ > 0 ? 1 : -1;
+            // Native local X maps to world +Z (tail), Native Z is wing axis.
+            const wingPos = new THREE.Vector3(offsets.sweepBack, -0.1, offsets.halfSpan * sign); 
+            
+            monolithRef.current.localToWorld(wingPos);
+            p.sprite.position.copy(wingPos);
+          }
+          
+          contrailStateRef.current.particleIndex = (index + 1) % 200;
+        };
+
+        const spawnRate = 0.016;
+        while (contrailStateRef.current.leftSpawnTimer <= 0) {
+          spawnParticle(3.8);
+          contrailStateRef.current.leftSpawnTimer += spawnRate;
+        }
+        while (contrailStateRef.current.rightSpawnTimer <= 0) {
+          spawnParticle(-3.8);
+          contrailStateRef.current.rightSpawnTimer += spawnRate;
+        }
+      }
+    }
+
     if (TERRAIN_ENABLED && terrainTilesRef.current.length > 0) {
       const scrollSpeed = TERRAIN_SCROLL_SPEED * (1 + boostVisualState.intensity * 2.6);
       const wrapThreshold = TERRAIN_TILE_LENGTH * 0.75;
@@ -2166,7 +2314,11 @@ function MonolithScene() {
         );
       });
 
+      const yAxis = new THREE.Vector3(0, 1, 0);
+      const deltaYaw = flightControl.worldYaw - flightControl.lastWorldYaw;
+      
       terrainTilesRef.current.forEach((tile) => {
+        tile.position.applyAxisAngle(yAxis, -deltaYaw);
         tile.position.z += scrollSpeed * delta;
         if (tile.position.z > wrapThreshold) {
           const nextRenderZOffset = furthestBackZ - TERRAIN_TILE_LENGTH;
@@ -2230,6 +2382,8 @@ function MonolithScene() {
     if (effectSnapshot.cinematicEnabled && effectSnapshot.bloomEnabled) {
       lightingRigRef.current?.animateBloomRing();
     }
+
+    flightControl.lastWorldYaw = flightControl.worldYaw;
   });
 
   return <SharedEffectStack {...effectSnapshot} />;
