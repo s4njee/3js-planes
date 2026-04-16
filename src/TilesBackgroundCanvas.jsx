@@ -1,5 +1,6 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import * as THREE from 'three';
+import GUI from 'lil-gui';
 import { DRACOLoader } from 'three/addons/loaders/DRACOLoader.js';
 import { toCreasedNormals } from 'three/addons/utils/BufferGeometryUtils.js';
 import { TilesRenderer, CAMERA_FRAME } from '3d-tiles-renderer';
@@ -23,16 +24,33 @@ import { resolveAssetUrl } from './monolith/asset-url.js';
 const ION_KEY = import.meta.env.VITE_CESIUM_ION_TOKEN;
 const DEG2RAD = Math.PI / 180;
 
-const STYLE = {
-  position: 'fixed',
-  inset: 0,
-  width: '100%',
-  height: '100%',
-  zIndex: 0,
+const AIRPORTS = [
+  { label: 'A', name: 'New York JFK',   lat: 40.6413, lon: -73.7781 },
+  { label: 'B', name: 'Los Angeles LAX', lat: 33.9425, lon: -118.4081 },
+  { label: 'C', name: 'Chicago O\'Hare', lat: 41.9742, lon: -87.9073 },
+  { label: 'D', name: 'Dallas DFW',      lat: 32.8998, lon: -97.0403 },
+];
+
+const NAV_STYLE = {
+  position: 'fixed', top: 16, right: 16, zIndex: 10,
+  display: 'flex', gap: 8,
 };
+
+const BTN_STYLE = (active) => ({
+  padding: '6px 12px',
+  borderRadius: 6,
+  border: '1px solid rgba(255,255,255,0.3)',
+  background: active ? 'rgba(255,255,255,0.25)' : 'rgba(0,0,0,0.45)',
+  color: '#fff',
+  font: '700 12px/1 monospace',
+  cursor: 'pointer',
+  backdropFilter: 'blur(6px)',
+});
 
 export default function TilesBackgroundCanvas() {
   const canvasRef = useRef(null);
+  const [active, setActive] = useState(null);
+  const teleportRef = useRef(null);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -84,7 +102,9 @@ export default function TilesBackgroundCanvas() {
 
     // position camera above Tokyo
     // Flight state — advance longitude each frame to simulate forward flight
-    const flightState = { lat: 35.6812 * DEG2RAD, lon: 139.80 * DEG2RAD, heading: -90 * DEG2RAD, boost: false, left: false, right: false };
+    const flightState = { lat: 35.6812 * DEG2RAD, lon: 139.80 * DEG2RAD, alt: 1500, heading: -90 * DEG2RAD, boost: false, left: false, right: false, up: false, down: false };
+    const ALT_MIN = 500, ALT_MAX = 3500;
+    teleportRef.current = flightState;
     const FLIGHT_SPEED = 0.00004;
     const TURN_SPEED = 0.8;
 
@@ -92,18 +112,22 @@ export default function TilesBackgroundCanvas() {
       if (e.code === 'Space') flightState.boost = true;
       if (e.code === 'ArrowLeft') flightState.left = true;
       if (e.code === 'ArrowRight') flightState.right = true;
+      if (e.code === 'ArrowUp') flightState.up = true;
+      if (e.code === 'ArrowDown') flightState.down = true;
     };
     const onKeyUp = (e) => {
       if (e.code === 'Space') flightState.boost = false;
       if (e.code === 'ArrowLeft') flightState.left = false;
       if (e.code === 'ArrowRight') flightState.right = false;
+      if (e.code === 'ArrowUp') flightState.up = false;
+      if (e.code === 'ArrowDown') flightState.down = false;
     };
     window.addEventListener('keydown', onKeyDown);
     window.addEventListener('keyup', onKeyUp);
 
     const updateCamera = () => {
       tiles.ellipsoid.getObjectFrame(
-        flightState.lat, flightState.lon, 500,
+        flightState.lat, flightState.lon, flightState.alt,
         flightState.heading, -10 * DEG2RAD, 0,
         camera.matrix, CAMERA_FRAME,
       );
@@ -111,12 +135,30 @@ export default function TilesBackgroundCanvas() {
     };
     updateCamera();
 
+    // GUI
+    const gui = new GUI({ title: 'Flight Controls' });
+    gui.hide();
+    const posFolder = gui.addFolder('Position');
+    posFolder.add(flightState, 'alt', ALT_MIN, ALT_MAX, 1).name('Altitude (m)').onChange(updateCamera);
+    const latProxy = { v: flightState.lat / DEG2RAD };
+    posFolder.add(latProxy, 'v', -85, 85, 0.0001).name('Latitude °').onChange(v => { flightState.lat = v * DEG2RAD; updateCamera(); });
+    const lonProxy = { v: flightState.lon / DEG2RAD };
+    posFolder.add(lonProxy, 'v', -180, 180, 0.0001).name('Longitude °').onChange(v => { flightState.lon = v * DEG2RAD; updateCamera(); });
+    const speedProxy = { v: FLIGHT_SPEED };
+    gui.add(speedProxy, 'v', 0, 0.001, 0.000001).name('Speed').onChange(v => { flightState._speed = v; });
+    const headingProxy = { v: flightState.heading / DEG2RAD };
+    gui.add(headingProxy, 'v', -180, 180, 0.1).name('Heading °').onChange(v => { flightState.heading = v * DEG2RAD; updateCamera(); });
+    gui.add({ v: 10 }, 'v', 1, 30, 0.1).name('Exposure').onChange(v => { renderer.toneMappingExposure = v; });
+    gui.add({ v: 0.3 }, 'v', 0, 1, 0.01).name('Cloud Coverage').onChange(v => { clouds.coverage = v; });
+
     // sun
     const sunDirection = new THREE.Vector3();
-    let hourUTC = 0;
 
     const updateSunDirection = () => {
-      const date = new Date(Date.UTC(2024, 2, 1) + hourUTC * 3600000);
+      // Use local solar noon: offset UTC so the sun is overhead at the current longitude
+      const lonDeg = flightState.lon / DEG2RAD;
+      const localNoonUTC = 12 - lonDeg / 15; // hours
+      const date = new Date(Date.UTC(2024, 2, 1) + localNoonUTC * 3600000);
       getSunDirectionECEF(date, sunDirection);
       aerialPerspective.sunDirection.copy(sunDirection);
       clouds.sunDirection.copy(sunDirection);
@@ -239,10 +281,13 @@ export default function TilesBackgroundCanvas() {
       if (deltaTime > 0 && deltaTime < 1) {
         if (flightState.left) flightState.heading -= TURN_SPEED * deltaTime;
         if (flightState.right) flightState.heading += TURN_SPEED * deltaTime;
-        const speed = FLIGHT_SPEED * (flightState.boost ? 10 : 1) * deltaTime;
+        const speed = (flightState._speed ?? FLIGHT_SPEED) * (flightState.boost ? 10 : 1) * deltaTime;
         flightState.lon += Math.sin(flightState.heading) * speed;
         flightState.lat += Math.cos(flightState.heading) * speed;
+        if (flightState.up) flightState.alt = Math.min(ALT_MAX, flightState.alt + 300 * deltaTime * (flightState.boost ? 10 : 1));
+        if (flightState.down) flightState.alt = Math.max(ALT_MIN, flightState.alt - 300 * deltaTime * (flightState.boost ? 10 : 1));
         updateCamera();
+        updateSunDirection();
       }
       tiles.update();
       renderer.render(scene, camera);
@@ -254,11 +299,32 @@ export default function TilesBackgroundCanvas() {
       window.removeEventListener('resize', onResize);
       window.removeEventListener('keydown', onKeyDown);
       window.removeEventListener('keyup', onKeyUp);
+      gui.destroy();
       tiles.dispose();
       dracoLoader.dispose();
       renderer.dispose();
     };
   }, []);
 
-  return <canvas ref={canvasRef} style={STYLE} />;
+  const handleAirport = (airport, idx) => {
+    setActive(idx);
+    if (teleportRef.current) {
+      teleportRef.current.lat = airport.lat * DEG2RAD;
+      teleportRef.current.lon = airport.lon * DEG2RAD;
+      teleportRef.current.heading = -90 * DEG2RAD;
+    }
+  };
+
+  return (
+    <>
+      <canvas ref={canvasRef} style={{ position: 'fixed', inset: 0, width: '100%', height: '100%', zIndex: 0 }} />
+      <nav style={NAV_STYLE}>
+        {AIRPORTS.map((a, i) => (
+          <button key={a.label} style={BTN_STYLE(active === i)} onClick={() => handleAirport(a, i)}>
+            {a.label} · {a.name}
+          </button>
+        ))}
+      </nav>
+    </>
+  );
 }
