@@ -47,7 +47,9 @@ export const CINEMATIC_EXPOSURE_MULTIPLIER = 0.58;
 
 // ── Clouds ─────────────────────────────────────────────────────────────────────
 
-export const CLOUDS_ENABLED = true;
+export const CLOUDS_ENABLED = false;
+export const VOLUMETRIC_CLOUDS_ENABLED = true;
+export const SPRITE_CLOUDS_ENABLED = CLOUDS_ENABLED && !VOLUMETRIC_CLOUDS_ENABLED;
 export const CLOUD_LAYER_COUNT = 5;
 export const CLOUDS_PER_LAYER = 40;
 export const CLOUD_SCROLL_SPEED = 9;
@@ -59,7 +61,7 @@ export const CLOUD_AMBIENT_MIN_FACTOR = 0.58;
 
 // ── Ocean ──────────────────────────────────────────────────────────────────────
 
-export const OCEAN_ENABLED = true;
+export const OCEAN_ENABLED = false;
 export const OCEAN_Y = -8;
 export const OCEAN_SIZE = 400;
 

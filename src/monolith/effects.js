@@ -76,5 +76,6 @@ export function createMonolithEffectSnapshot(guiParams, state, glitchTriggerToke
     scanlineOpacity: guiParams.scanlineOpacity,
     scanlineScrollSpeed: guiParams.scanlineScrollSpeed,
     thermalVisionEnabled: state.thermalVisionEnabled,
+    volumetricCloudsEnabled: false,
   };
 }

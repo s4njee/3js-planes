@@ -5,6 +5,13 @@ export default defineConfig(() => ({
   define: {
     __ASSET_VERSION__: JSON.stringify(Date.now().toString()),
   },
+  optimizeDeps: {
+    include: [
+      '@react-three/drei',
+      '@takram/three-atmosphere',
+      '@takram/three-clouds',
+    ],
+  },
   plugins: [react()],
   build: {
     rollupOptions: {

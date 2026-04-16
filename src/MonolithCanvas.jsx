@@ -68,12 +68,13 @@ import {
 
 import { createContrails } from './monolith/contrails.js';
 import { createHeatShimmerGroup } from './monolith/heat-shimmer.js';
+import CesiumTilesBackground from './monolith/CesiumTilesBackground.jsx';
 import { createInitialFlightControl, createInitialMonolithState } from './monolith/flight-state.js';
 import { createMonolithEffectSnapshot, canTriggerMonolithGlitch } from './monolith/effects.js';
 
 // ── Shared effects ─────────────────────────────────────────────────────────────
 
-import SafeCanvas from './shared/webgl/SafeCanvas.tsx';
+import { Canvas } from '@react-three/fiber';
 import {
   SharedEffectStack,
   createSharedEffectHotkeyListener,
@@ -247,16 +248,14 @@ function MonolithScene() {
   const applySceneAppearance = () => {
     const effectiveWhiteMode = getEffectiveWhiteMode();
 
-    document.body.style.background = effectiveWhiteMode ? 'white' : '#050709';
+    document.body.style.background = effectiveWhiteMode ? 'white' : 'transparent';
     scene.environment = null;
-    scene.background = currentSetDef().nullBackground
-      ? null
-      : new THREE.Color(effectiveWhiteMode ? 0xffffff : BASE_SCENE_BACKGROUND);
+    scene.background = effectiveWhiteMode ? new THREE.Color(0xffffff) : null;
     if (skyDomeRef.current) {
-      skyDomeRef.current.visible = !effectiveWhiteMode;
+      skyDomeRef.current.visible = false; // tiles replace the sky dome
     }
     if (cloudFieldRef.current) {
-      cloudFieldRef.current.visible = !effectiveWhiteMode && CLOUDS_ENABLED;
+      cloudFieldRef.current.visible = false; // replaced by volumetric clouds
     }
     if (oceanRef.current) {
       oceanRef.current.visible = !effectiveWhiteMode && OCEAN_ENABLED;
@@ -664,12 +663,12 @@ function MonolithScene() {
   // ── Setup effect (mount / unmount) ────────────────────────────────────────
 
   useEffect(() => {
-    scene.background = new THREE.Color(BASE_SCENE_BACKGROUND);
-    document.body.style.background = '#050709';
+    scene.background = null;
+    document.body.style.background = 'transparent';
 
     camera.fov = BASE_CAMERA_FOV;
     camera.near = 0.1;
-    camera.far = 250;
+    camera.far = 2000;
     camera.position.set(0, 5.0, 14);
     camera.updateProjectionMatrix();
 
@@ -1445,14 +1444,14 @@ export default function MonolithCanvas() {
   const dpr = useMemo(() => Math.min(window.devicePixelRatio, 2), []);
 
   return (
-    <SafeCanvas
+    <Canvas
       dpr={dpr}
-      rendererOptions={{ antialias: true, alpha: true }}
-      sceneLabel="Planes"
+      gl={{ antialias: true, alpha: true }}
+      style={{ position: 'fixed', inset: 0, zIndex: 1 }}
     >
       <Suspense fallback={null}>
         <MonolithScene />
       </Suspense>
-    </SafeCanvas>
+    </Canvas>
   );
 }

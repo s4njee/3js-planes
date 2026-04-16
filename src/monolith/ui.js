@@ -6,7 +6,7 @@
 //
 // Elements created:
 //   label       — bottom-centre model name, shown briefly after each load
-//   modeNav     — top-left row of lighting-mode buttons (A / B)
+//   cityNav     — top-left row of city buttons (A / B / C / D)
 //
 // All elements are appended to document.body and removed in destroy().
 // The label timeout ID is tracked locally (labelTimeout) and cleared in
@@ -16,8 +16,9 @@
 
 export function createUI({
   getWhiteMode,
-  getLightingMode,
-  onSwitchLightingMode,
+  cityOptions = [],
+  getCurrentCityIndex,
+  onSwitchCity,
 }) {
   // ── Model name label ──────────────────────────────────────────────────────
 
@@ -29,7 +30,7 @@ export function createUI({
 
   // ── Shared button style helper ────────────────────────────────────────────────────
 
-  const BTN_CSS = 'width:36px;height:36px;display:flex;align-items:center;justify-content:center;border:1px solid rgba(255,255,255,0.3);color:#fff;font:14px/1 monospace;cursor:pointer;background:rgba(255,255,255,0.05);transition:all 0.2s;user-select:none';
+  const BTN_CSS = 'min-width:36px;height:36px;padding:0 12px;display:flex;align-items:center;justify-content:center;border:1px solid rgba(255,255,255,0.3);color:#fff;font:12px/1 monospace;cursor:pointer;background:rgba(255,255,255,0.05);transition:all 0.2s;user-select:none;white-space:nowrap';
 
   function styleButton(button, active) {
     const whiteMode = getWhiteMode();
@@ -39,26 +40,26 @@ export function createUI({
     button.style.borderColor = `rgba(${colorTriplet},${active ? 0.7 : 0.3})`;
   }
 
-  // ── Lighting mode buttons (A / B) ──────────────────────────────────────────────────
+  // ── City buttons (A / B / C / D) ──────────────────────────────────────────────────
 
-  const modeNav = document.createElement('div');
-  modeNav.style.cssText = 'position:fixed;top:16px;left:16px;display:flex;gap:8px;z-index:10';
-  document.body.appendChild(modeNav);
+  const cityNav = document.createElement('div');
+  cityNav.style.cssText = 'position:fixed;top:16px;left:16px;display:flex;gap:8px;z-index:10;flex-wrap:wrap;max-width:calc(100vw - 32px)';
+  document.body.appendChild(cityNav);
 
-  const modeButtons = [];
-  ['A', 'B'].forEach((labelText, index) => {
+  const cityButtons = [];
+  cityOptions.forEach((city, index) => {
     const button = document.createElement('div');
-    button.textContent = labelText;
+    button.textContent = `${city.key} ${city.name}`;
     button.style.cssText = BTN_CSS;
-    button.addEventListener('click', () => onSwitchLightingMode(index));
+    button.addEventListener('click', () => onSwitchCity(index));
     button.addEventListener('mouseenter', () => {
-      if (index !== getLightingMode()) styleButton(button, false);
+      if (index !== getCurrentCityIndex()) styleButton(button, false);
     });
     button.addEventListener('mouseleave', () => {
-      if (index !== getLightingMode()) styleButton(button, false);
+      if (index !== getCurrentCityIndex()) styleButton(button, false);
     });
-    modeNav.appendChild(button);
-    modeButtons.push(button);
+    cityNav.appendChild(button);
+    cityButtons.push(button);
   });
 
   // ── Update helpers and public API ───────────────────────────────────────────────────
@@ -72,26 +73,27 @@ export function createUI({
     }, 1500);
   }
 
-  function updateModeButtons() {
-    modeButtons.forEach((button, index) => styleButton(button, index === getLightingMode()));
+  function updateCityButtons() {
+    cityButtons.forEach((button, index) => styleButton(button, index === getCurrentCityIndex()));
   }
 
   function applyWhiteMode() {
     const textColor = getWhiteMode() ? '#000' : '#fff';
     label.style.color = textColor;
-    updateModeButtons();
+    updateCityButtons();
   }
 
-  updateModeButtons();
+  updateCityButtons();
 
   return {
     applyWhiteMode,
     destroy: () => {
       label.remove();
-      modeNav.remove();
+      cityNav.remove();
       clearTimeout(labelTimeout);
     },
     updateLabel,
-    updateModeButtons,
+    updateCityButtons,
+    updateModeButtons: () => {},
   };
 }

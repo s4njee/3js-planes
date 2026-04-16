@@ -503,17 +503,33 @@ export function createLightingRig({ scene, currentSetDef, getCurrentModelIndex, 
     resetAllLights();
     ambient.color.set(0xffffff);
     const isBoosting = getIsBoosting ? getIsBoosting() : false;
-    ambient.intensity = isBoosting ? 0.34 : 0.08;
+    ambient.intensity = isBoosting ? 0.34 : 0.22;
     applyCloudAmbientFactor();
 
-    if (isBoosting) {
-      // Keep the aircraft readable when boost motion pulls the particle-driven
-      // glow lights away from the model.
+    const monolith = getMonolith();
+    if (monolith) {
+      // Keep the aircraft readable over textured terrain even when particle
+      // glow lights are not close enough to illuminate the model.
       dirRingLight.visible = true;
-      dirRingLight.position.set(0, 8, 6);
-      dirRingLight.target.position.set(0, 1.5, 0);
+      dirRingLight.position.set(
+        monolith.position.x - 3,
+        monolith.position.y + 7,
+        monolith.position.z + 8,
+      );
+      dirRingLight.target.position.copy(monolith.position);
+      dirRingLight.target.position.y += 1.4;
       dirRingLight.target.updateMatrixWorld();
-      dirRingLight.intensity = 1.6;
+      dirRingLight.intensity = isBoosting ? 1.8 : 1.05;
+
+      dirRingLight2.visible = true;
+      dirRingLight2.position.set(
+        monolith.position.x + 5,
+        monolith.position.y + 3,
+        monolith.position.z + 4,
+      );
+      dirRingLight2.target.position.copy(monolith.position);
+      dirRingLight2.target.updateMatrixWorld();
+      dirRingLight2.intensity = isBoosting ? 0.65 : 0.38;
     }
 
     const nowMs = Date.now();
@@ -526,7 +542,6 @@ export function createLightingRig({ scene, currentSetDef, getCurrentModelIndex, 
     // the per-frame cost of iterating all 5000 particles on the CPU.
     if (lightFrame % 4 === 0) {
       baseHue = updateParticleColors({ time: t, hueType });
-      const monolith = getMonolith();
       const nearestParticles = collectNearestParticlesToMonolith(positions, monolith.position);
       updateParticleGlowLights({ baseHue, hueType, nearestParticles });
     }
