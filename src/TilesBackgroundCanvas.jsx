@@ -20,6 +20,7 @@ import { AerialPerspectiveEffect, PrecomputedTexturesGenerator, getSunDirectionE
 import { STBNLoader, DEFAULT_STBN_URL } from '@takram/three-geospatial';
 import { DitheringEffect, LensFlareEffect } from '@takram/three-geospatial-effects';
 import { resolveAssetUrl } from './monolith/asset-url.js';
+import { flightState } from './flight-store.js';
 
 const ION_KEY = import.meta.env.VITE_CESIUM_ION_TOKEN;
 const DEG2RAD = Math.PI / 180;
@@ -100,9 +101,8 @@ export default function TilesBackgroundCanvas() {
     tiles.setResolutionFromRenderer(camera, renderer);
     scene.add(tiles.group);
 
-    // position camera above Tokyo
-    // Flight state — advance longitude each frame to simulate forward flight
-    const flightState = { lat: 35.6812 * DEG2RAD, lon: 139.80 * DEG2RAD, alt: 1500, heading: -90 * DEG2RAD, boost: false, left: false, right: false, up: false, down: false };
+    // position camera above Tokyo. flightState is module-shared (see flight-store.js)
+    // so the Minimap can read lat/lon/heading without prop drilling.
     const ALT_MIN = 500, ALT_MAX = 3500;
     teleportRef.current = flightState;
     const FLIGHT_SPEED = 0.00004;
@@ -202,8 +202,8 @@ export default function TilesBackgroundCanvas() {
       render(renderer, writeBuffer, readBuffer) {
         if (!this._initialized) {
           this.pass.initialize(renderer, false, THREE.HalfFloatType);
-          this.pass.setSize(readBuffer.width, readBuffer.height);
-          if (readBuffer.depthTexture && this.pass.setDepthTexture) {
+          if (readBuffer) this.pass.setSize(readBuffer.width, readBuffer.height);
+          if (readBuffer?.depthTexture && this.pass.setDepthTexture) {
             this.pass.setDepthTexture(readBuffer.depthTexture);
           }
           this._initialized = true;

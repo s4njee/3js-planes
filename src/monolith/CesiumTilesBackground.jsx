@@ -6,6 +6,14 @@ import { CesiumIonAuthPlugin } from '3d-tiles-renderer/core/plugins';
 import { GLTFExtensionsPlugin, TilesFadePlugin } from '3d-tiles-renderer/three/plugins';
 import { DRACOLoader } from 'three/addons/loaders/DRACOLoader.js';
 import { resolveAssetUrl } from './asset-url.js';
+import {
+  clearCesiumTerrainFrame,
+  CESIUM_TERRAIN_LAT_RAD,
+  CESIUM_TERRAIN_LON_RAD,
+  CESIUM_TERRAIN_SCENE_SCALE,
+  CESIUM_TERRAIN_SCENE_Y,
+  setCesiumTerrainFrame,
+} from './cesium-geospatial.js';
 
 // ── CesiumTilesBackground ──────────────────────────────────────────────────────
 // Loads Google Photorealistic 3D Tiles (Cesium Ion asset 2275207) and positions
@@ -20,18 +28,6 @@ import { resolveAssetUrl } from './asset-url.js';
 
 const ION_ASSET_ID = '2275207'; // Google Photorealistic 3D Tiles
 const ION_TOKEN = import.meta.env.VITE_CESIUM_ION_TOKEN;
-
-// San Francisco Bay Area
-const LAT_RAD = 37.7749 * (Math.PI / 180);
-const LON_RAD = -122.4194 * (Math.PI / 180);
-
-// 1 scene unit ≈ 2.2 real metres (aircraft model scale).
-// SCENE_SCALE = 1/2.2 ≈ 0.45 would be 1:1 with the aircraft.
-// We use a smaller value so the terrain appears as a distant landscape.
-const SCENE_SCALE = 0.008; // 1 metre → 0.008 scene units (125m = 1 scene unit)
-
-// Terrain surface Y position in scene space
-const TERRAIN_Y = -14;
 
 export default function CesiumTilesBackground() {
   const { gl, scene, camera } = useThree();
@@ -60,24 +56,25 @@ export default function CesiumTilesBackground() {
 
     const onLoadTileset = () => {
       const { ellipsoid, group } = tiles;
-
-      // ENU frame at our location: transforms local ENU → ECEF
       const enuToECEF = new THREE.Matrix4();
-      ellipsoid.getEastNorthUpFrame(LAT_RAD, LON_RAD, 0, enuToECEF);
-
-      // Inverse: ECEF → ENU (terrain surface at origin, Y=up)
-      const ecefToENU = enuToECEF.clone().invert();
+      ellipsoid.getEastNorthUpFrame(CESIUM_TERRAIN_LAT_RAD, CESIUM_TERRAIN_LON_RAD, 0, enuToECEF);
 
       // Full transform: ECEF → scene space
       // 1. Rotate/translate to ENU (terrain surface at origin)
       // 2. Scale to scene units
-      // 3. Translate terrain surface to TERRAIN_Y
-      const scaleMatrix = new THREE.Matrix4().makeScale(SCENE_SCALE, SCENE_SCALE, SCENE_SCALE);
-      const translateMatrix = new THREE.Matrix4().makeTranslation(0, TERRAIN_Y, 0);
+      // 3. Translate terrain surface to the scene floor
+      const ecefToENU = enuToECEF.clone().invert();
+      const scaleMatrix = new THREE.Matrix4().makeScale(
+        CESIUM_TERRAIN_SCENE_SCALE,
+        CESIUM_TERRAIN_SCENE_SCALE,
+        CESIUM_TERRAIN_SCENE_SCALE,
+      );
+      const translateMatrix = new THREE.Matrix4().makeTranslation(0, CESIUM_TERRAIN_SCENE_Y, 0);
 
       group.matrix.copy(translateMatrix).multiply(scaleMatrix).multiply(ecefToENU);
       group.matrixAutoUpdate = false;
       group.matrixWorldNeedsUpdate = true;
+      setCesiumTerrainFrame(ellipsoid, group.matrix);
     };
 
     tiles.addEventListener('load-tileset', onLoadTileset);
@@ -90,6 +87,7 @@ export default function CesiumTilesBackground() {
       scene.remove(tiles.group);
       tiles.dispose();
       dracoLoader.dispose();
+      clearCesiumTerrainFrame();
       stateRef.current = null;
     };
   }, [camera, gl, scene]);

@@ -2,6 +2,7 @@ import React, { lazy, Suspense } from 'react';
 
 const MonolithCanvas = lazy(() => import('./MonolithCanvas.jsx'));
 const TilesBackgroundCanvas = lazy(() => import('./TilesBackgroundCanvas.jsx'));
+const Minimap = lazy(() => import('./Minimap.jsx'));
 
 const OVERLAY_STYLE = {
   position: 'fixed',
@@ -17,6 +18,7 @@ export default function App() {
       <div style={OVERLAY_STYLE}>
         <MonolithCanvas />
       </div>
+      <Minimap />
     </Suspense>
   );
 }

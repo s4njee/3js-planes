@@ -69,6 +69,8 @@ import {
 import { createContrails } from './monolith/contrails.js';
 import { createHeatShimmerGroup } from './monolith/heat-shimmer.js';
 import CesiumTilesBackground from './monolith/CesiumTilesBackground.jsx';
+import { flightState } from './flight-store.js';
+import { scenePositionToCartographic } from './monolith/cesium-geospatial.js';
 import { createInitialFlightControl, createInitialMonolithState } from './monolith/flight-state.js';
 import { createMonolithEffectSnapshot, canTriggerMonolithGlitch } from './monolith/effects.js';
 
@@ -338,6 +340,14 @@ function MonolithScene() {
     monolithRef.current.rotateX(-flightControlRef.current.bankOffset);
     monolithRef.current.rotateY(-flightControlRef.current.yawOffset);
     monolithRef.current.rotateZ(flightControlRef.current.pitchOffset);
+
+    const cartographic = scenePositionToCartographic(monolithRef.current.position);
+    if (cartographic) {
+      flightState.lat = cartographic.lat;
+      flightState.lon = cartographic.lon;
+      flightState.alt = cartographic.height;
+      flightState.heading = -Math.PI / 2 - flightControlRef.current.worldYaw;
+    }
   };
 
   // ── Model swap ────────────────────────────────────────────────────────────
@@ -1140,9 +1150,11 @@ function MonolithScene() {
     camera.position.y = THREE.MathUtils.lerp(camera.position.y, targetCamY, delta * 4);
 
     const targetLookY = planePos.y + 2.5;
-    controlsRef.current.target.x = THREE.MathUtils.lerp(controlsRef.current.target.x, planePos.x, delta * 6);
-    controlsRef.current.target.z = THREE.MathUtils.lerp(controlsRef.current.target.z, planePos.z, delta * 6);
-    controlsRef.current.target.y = THREE.MathUtils.lerp(controlsRef.current.target.y, targetLookY, delta * 4);
+    if (controlsRef.current) {
+      controlsRef.current.target.x = THREE.MathUtils.lerp(controlsRef.current.target.x, planePos.x, delta * 6);
+      controlsRef.current.target.z = THREE.MathUtils.lerp(controlsRef.current.target.z, planePos.z, delta * 6);
+      controlsRef.current.target.y = THREE.MathUtils.lerp(controlsRef.current.target.y, targetLookY, delta * 4);
+    }
     controlsRef.current?.update();
     mixerRef.current?.update(delta);
     materialManagerRef.current?.updateXrayAnimation(elapsed);
