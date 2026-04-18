@@ -8,6 +8,9 @@ export const MODEL_SET_DEF = {
       key: '1',
       name: 'SR-71',
       path: '/set3/Meshy_AI_sr71_0404124235_texture.glb',
+      // Approximate SR-71 cruise speed at altitude. Used to calibrate the
+      // spacebar boost to something closer to real-world motion.
+      realisticBoostSpeedMps: 980,
       engineShimmers: [
         { x: 6.13, y: 0.41, z: 1.4 },
         { x: 6.13, y: 0.41, z: -1.26 },

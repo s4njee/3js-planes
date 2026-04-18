@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef } from 'react';
 import type { ReactElement } from 'react';
 import { useFrame } from '@react-three/fiber';
 import {
@@ -6,6 +6,8 @@ import {
   ChromaticAberration,
   EffectComposer,
 } from '@react-three/postprocessing';
+import { AerialPerspective, Atmosphere } from '@takram/three-atmosphere/r3f';
+import { Clouds } from '@takram/three-clouds/r3f';
 import * as THREE from 'three';
 import {
   getHueCycleHue,
@@ -60,6 +62,7 @@ export interface SharedEffectStackProps {
   scanlineScrollSpeed?: number;
   screenXrayEnabled?: boolean;
   thermalVisionEnabled?: boolean;
+  volumetricCloudsEnabled?: boolean;
 }
 
 export default function SharedEffectStack({
@@ -98,9 +101,10 @@ export default function SharedEffectStack({
   scanlineScrollSpeed = 0.08,
   screenXrayEnabled = false,
   thermalVisionEnabled = false,
+  volumetricCloudsEnabled = false,
 }: SharedEffectStackProps) {
   const { qualityTier } = useFrameRate();
-  const composerEnabled = qualityTier === 'high';
+  const composerEnabled = qualityTier === 'high' || volumetricCloudsEnabled;
   const effectiveBloomEnabled = bloomEnabled;
   const effectiveScanlineEnabled = scanlineEnabled;
   const effectiveChromaticEnabled = chromaticAberrationEnabled;
@@ -187,6 +191,15 @@ export default function SharedEffectStack({
 
   // Keep the effect stack readable: each enabled flag contributes a single pass
   // or effect instance here instead of spreading pass wiring across scene files.
+  if (volumetricCloudsEnabled) {
+    composerChildren.push(
+      <Clouds key="volumetric-clouds" qualityPreset="medium" coverage={0.4} />,
+    );
+    composerChildren.push(
+      <AerialPerspective key="aerial" />,
+    );
+  }
+
   if (cinematicEnabled && effectiveBloomEnabled) {
     composerChildren.push(
       <Bloom
@@ -242,9 +255,17 @@ export default function SharedEffectStack({
     composerChildren.push(<primitive key="xray" object={screenXrayEffect} />);
   }
 
+  if (volumetricCloudsEnabled) {
+    return (
+      <Atmosphere>
+        <EffectComposer depthBuffer enableNormalPass>{composerChildren}</EffectComposer>
+      </Atmosphere>
+    );
+  }
+
   if (!composerEnabled || composerChildren.length === 0) {
     return null;
   }
 
-  return <EffectComposer>{composerChildren}</EffectComposer>;
+  return <EffectComposer enableNormalPass>{composerChildren}</EffectComposer>;
 }

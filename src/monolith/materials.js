@@ -260,6 +260,7 @@ export function createMaterialManager(renderer) {
     box.setFromObject(model);
     const center = new THREE.Vector3();
     box.getCenter(center);
+    model.userData.monolithGeoAnchor = center.clone();
     model.position.x -= center.x;
     model.position.z -= center.z;
     model.position.y -= box.min.y;
