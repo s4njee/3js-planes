@@ -37,6 +37,13 @@ export function createHeatShimmerMaterial() {
         vUv = uv;
         vec3 pos = position;
 
+        // Skip turbulence computation when boost is off (perf idea N)
+        if (boostIntensity < 0.01) {
+          vDisplacement = 0.0;
+          gl_Position = projectionMatrix * modelViewMatrix * vec4(pos, 1.0);
+          return;
+        }
+
         float tailFade = 1.0 - vUv.y;
 
         // Multi-frequency turbulence for chaotic flame shape
@@ -78,6 +85,7 @@ export function createHeatShimmerMaterial() {
       }
 
       void main() {
+        // Early discard when boost is off — skip all noise computation (perf idea N)
         if (boostIntensity < 0.01) discard;
 
         // Fast-scrolling noise at multiple scales for flame detail

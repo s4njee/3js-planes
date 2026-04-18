@@ -257,6 +257,9 @@ export default function SharedEffectStack({
     composerChildren.push(<primitive key="xray" object={screenXrayEffect} />);
   }
 
+  // Only enable the expensive normal pass when an effect actually needs it
+  const needsNormalPass = volumetricCloudsEnabled;
+
   if (volumetricCloudsEnabled) {
     return (
       <Atmosphere>
@@ -269,5 +272,5 @@ export default function SharedEffectStack({
     return null;
   }
 
-  return <EffectComposer enableNormalPass>{composerChildren}</EffectComposer>;
+  return <EffectComposer enableNormalPass={needsNormalPass}>{composerChildren}</EffectComposer>;
 }

@@ -20,7 +20,7 @@ import { AerialPerspectiveEffect, PrecomputedTexturesGenerator, getSunDirectionE
 import { STBNLoader, DEFAULT_STBN_URL } from '@takram/three-geospatial';
 import { DitheringEffect, LensFlareEffect } from '@takram/three-geospatial-effects';
 import { resolveAssetUrl } from './monolith/asset-url.js';
-import { flightState, tickAutopilot, cancelAutopilot, requestAutopilot } from './flight-store.js';
+import { flightState, tickAutopilot, cancelAutopilot, requestAutopilot, autopilot } from './flight-store.js';
 import CitySearch from './CitySearch.jsx';
 import { shouldSuppressGlobalShortcuts } from './keyboard-shortcuts.js';
 import { publishBackgroundPerformanceSnapshot } from './shared/performance/index.ts';
@@ -127,6 +127,15 @@ export default function TilesBackgroundCanvas() {
     let frameTimeTotal = 0;
     const frameTimeSamples = [];
 
+    // Sun direction throttle (perf idea J) — only recompute when longitude
+    // changes by ~0.5° (~0.0087 rad), saving Date allocation + trig per frame.
+    let lastSunLon = flightState.lon;
+    const SUN_LON_THRESHOLD = 0.0087; // ~0.5 degrees in radians
+
+    // Idle half-rate rendering (perf idea O) — when no input and no autopilot,
+    // skip every other background frame since the scene is effectively static.
+    let idleFrameSkip = false;
+
     // renderer
     const renderer = new THREE.WebGLRenderer({
       canvas,
@@ -167,6 +176,11 @@ export default function TilesBackgroundCanvas() {
     tiles.registerPlugin(new UpdateOnChangePlugin());
     tiles.setCamera(camera);
     tiles.setResolutionFromRenderer(camera, renderer);
+    // Scale tile LOD error target with DPR (perf idea K) — at lower DPR,
+    // accept coarser tiles since the resolution hides the difference.
+    if (tiles.errorTarget !== undefined) {
+      tiles.errorTarget = 6 / backgroundDpr;
+    }
     scene.add(tiles.group);
 
     // flightState is module-shared (see flight-store.js) so the minimap and
@@ -549,8 +563,30 @@ export default function TilesBackgroundCanvas() {
         if (flightState.up) flightState.alt = Math.min(ALT_MAX, flightState.alt + 300 * deltaTime * (flightState.boost ? 10 : 1));
         if (flightState.down) flightState.alt = Math.max(ALT_MIN, flightState.alt - 300 * deltaTime * (flightState.boost ? 10 : 1));
         updateCamera();
-        updateSunDirection();
+
+        // Throttle sun direction to longitude-change threshold (perf idea J)
+        if (Math.abs(flightState.lon - lastSunLon) > SUN_LON_THRESHOLD) {
+          updateSunDirection();
+          lastSunLon = flightState.lon;
+        }
       }
+
+      // Idle half-rate rendering (perf idea O) — skip every other frame
+      // when the scene is effectively static (no input, no autopilot).
+      const isIdle = !flightState.left && !flightState.right
+        && !flightState.up && !flightState.down
+        && !flightState.boost && !autopilot.active;
+      if (isIdle) {
+        idleFrameSkip = !idleFrameSkip;
+        if (idleFrameSkip) {
+          // Still update tiles for streaming, but skip the expensive render
+          tiles.update();
+          return;
+        }
+      } else {
+        idleFrameSkip = false;
+      }
+
       tiles.update();
       renderer.render(scene, camera);
     };

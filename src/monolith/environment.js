@@ -24,6 +24,42 @@ import {
 // The `yaw` uniform rotates the entire sky to match the flight direction.
 
 export function createSkyDome() {
+  // ── Bake FBM noise into a tileable 2D texture (perf idea G) ───────────────
+  // Instead of running 5-octave FBM per fragment every frame, we bake the noise
+  // into a 512×512 texture once and sample it with a single texture2D lookup.
+  const NOISE_SIZE = 512;
+  const noiseData = new Uint8Array(NOISE_SIZE * NOISE_SIZE);
+  // Simple JS hash/noise matching the GLSL version for consistent look
+  function hash2(x, y) {
+    return ((Math.sin(x * 127.1 + y * 311.7) * 43758.5453123) % 1 + 1) % 1;
+  }
+  function noise2(x, y) {
+    const ix = Math.floor(x), iy = Math.floor(y);
+    let fx = x - ix, fy = y - iy;
+    fx = fx * fx * (3 - 2 * fx);
+    fy = fy * fy * (3 - 2 * fy);
+    const n00 = hash2(ix, iy), n10 = hash2(ix + 1, iy);
+    const n01 = hash2(ix, iy + 1), n11 = hash2(ix + 1, iy + 1);
+    return (n00 * (1 - fx) + n10 * fx) * (1 - fy) + (n01 * (1 - fx) + n11 * fx) * fy;
+  }
+  function fbm2(x, y) {
+    let v = 0, a = 0.5;
+    for (let i = 0; i < 5; i++) { v += noise2(x, y) * a; x *= 2; y *= 2; a *= 0.5; }
+    return v;
+  }
+  for (let j = 0; j < NOISE_SIZE; j++) {
+    for (let i = 0; i < NOISE_SIZE; i++) {
+      const u = (i / NOISE_SIZE) * 8, v = (j / NOISE_SIZE) * 8;
+      noiseData[j * NOISE_SIZE + i] = Math.floor(fbm2(u, v) * 255);
+    }
+  }
+  const noiseTex = new THREE.DataTexture(noiseData, NOISE_SIZE, NOISE_SIZE, THREE.RedFormat);
+  noiseTex.wrapS = noiseTex.wrapT = THREE.RepeatWrapping;
+  noiseTex.minFilter = THREE.LinearMipMapLinearFilter;
+  noiseTex.magFilter = THREE.LinearFilter;
+  noiseTex.generateMipmaps = true;
+  noiseTex.needsUpdate = true;
+
   const geometry = new THREE.SphereGeometry(SKY_DOME_RADIUS, 48, 32);
   const material = new THREE.ShaderMaterial({
     side: THREE.BackSide,
@@ -31,6 +67,7 @@ export function createSkyDome() {
     uniforms: {
       time: { value: 0 },
       yaw: { value: 0 },
+      noiseTex: { value: noiseTex },
     },
     vertexShader: `
       varying vec3 vDirection;
@@ -43,44 +80,20 @@ export function createSkyDome() {
     fragmentShader: `
       uniform float time;
       uniform float yaw;
+      uniform sampler2D noiseTex;
       varying vec3 vDirection;
 
-      float hash(vec3 p) {
-        return fract(sin(dot(p, vec3(127.1, 311.7, 74.7))) * 43758.5453123);
-      }
-
-      float noise(vec3 p) {
-        vec3 i = floor(p);
-        vec3 f = fract(p);
-        f = f * f * (3.0 - 2.0 * f);
-
-        float n000 = hash(i + vec3(0.0, 0.0, 0.0));
-        float n100 = hash(i + vec3(1.0, 0.0, 0.0));
-        float n010 = hash(i + vec3(0.0, 1.0, 0.0));
-        float n110 = hash(i + vec3(1.0, 1.0, 0.0));
-        float n001 = hash(i + vec3(0.0, 0.0, 1.0));
-        float n101 = hash(i + vec3(1.0, 0.0, 1.0));
-        float n011 = hash(i + vec3(0.0, 1.0, 1.0));
-        float n111 = hash(i + vec3(1.0, 1.0, 1.0));
-
-        float nx00 = mix(n000, n100, f.x);
-        float nx10 = mix(n010, n110, f.x);
-        float nx01 = mix(n001, n101, f.x);
-        float nx11 = mix(n011, n111, f.x);
-        float nxy0 = mix(nx00, nx10, f.y);
-        float nxy1 = mix(nx01, nx11, f.y);
-        return mix(nxy0, nxy1, f.z);
-      }
-
+      // Sample baked FBM noise texture instead of computing per-fragment
       float fbm(vec3 p) {
-        float value = 0.0;
-        float amplitude = 0.5;
-        for (int i = 0; i < 5; i += 1) {
-          value += noise(p) * amplitude;
-          p *= 2.0;
-          amplitude *= 0.5;
-        }
-        return value;
+        // Project 3D position to 2D UV with time-based scrolling
+        vec2 uv = p.xz * 0.125 + p.y * 0.08;
+        return texture2D(noiseTex, uv).r;
+      }
+
+      // Lightweight single-sample noise for god ray variation
+      float noise(vec3 p) {
+        vec2 uv = p.xy * 0.25;
+        return texture2D(noiseTex, uv).r;
       }
 
       vec3 rotateY(vec3 v, float angle) {
@@ -133,52 +146,40 @@ export function createSkyDome() {
         float sunDot = dot(dir, sunDir);
         float sunAngle = max(sunDot, 0.0);
 
-        // Bright white core
         float sunDisc = smoothstep(0.9980, 0.9994, sunAngle);
         base += vec3(1.0, 0.95, 0.8) * sunDisc * 6.0;
 
-        // Inner glow — yellowish-white
         float sunGlow = pow(sunAngle, 32.0);
         base += vec3(1.0, 0.7, 0.3) * sunGlow * 1.8;
 
-        // Mid glow
         float sunMid = pow(sunAngle, 12.0);
         base += vec3(0.9, 0.45, 0.12) * sunMid * 0.7;
 
-        // Wide warm wash
         float sunWash = pow(sunAngle, 5.0);
         base += vec3(0.5, 0.18, 0.05) * sunWash * 0.4;
 
-        // ── God rays (crepuscular rays) ─────────────────────────────
-        float cloudOcclusion = wisps + cloudLayer * 0.7 + highClouds * 0.5;
+        // ── God rays — skip when sun is behind camera (perf idea N) ──
+        if (sunAngle > 0.001) {
+          float cloudOcclusion = wisps + cloudLayer * 0.7 + highClouds * 0.5;
+          vec3 toSun = dir - sunDir * sunDot;
+          float toSunLen = length(toSun);
+          float rayAngle = toSunLen > 0.001 ? atan(toSun.y, toSun.x) : 0.0;
 
-        // Guard against zero-length toSun (when dir == sunDir)
-        vec3 toSun = dir - sunDir * sunDot;
-        float toSunLen = length(toSun);
-        float rayAngle = toSunLen > 0.001 ? atan(toSun.y, toSun.x) : 0.0;
+          float rays = 0.0;
+          rays += sin(rayAngle * 7.0 + time * 0.08) * 0.5 + 0.5;
+          rays *= sin(rayAngle * 13.0 - time * 0.05) * 0.3 + 0.7;
+          rays += (sin(rayAngle * 23.0 + time * 0.12) * 0.5 + 0.5) * 0.3;
 
-        // Multiple overlapping ray frequencies for natural look
-        float rays = 0.0;
-        rays += sin(rayAngle * 7.0 + time * 0.08) * 0.5 + 0.5;
-        rays *= sin(rayAngle * 13.0 - time * 0.05) * 0.3 + 0.7;
-        rays += (sin(rayAngle * 23.0 + time * 0.12) * 0.5 + 0.5) * 0.3;
+          float rayNoise = noise(vec3(rayAngle * 3.0, time * 0.1, 0.0));
+          rays *= 0.6 + rayNoise * 0.4;
 
-        // Noise-based variation so rays aren't perfectly uniform
-        float rayNoise = noise(vec3(rayAngle * 3.0, time * 0.1, 0.0));
-        rays *= 0.6 + rayNoise * 0.4;
+          float rayFalloff = pow(sunAngle, 3.0);
+          float rayOcclusion = max(1.0 - cloudOcclusion * 0.7, 0.3);
+          float rayHeightMask = smoothstep(0.5, 0.0, dir.y) * smoothstep(-0.4, -0.1, dir.y);
 
-        // Rays only visible near the sun, fading with angular distance
-        float rayFalloff = pow(max(sunAngle, 0.0), 3.0);
-
-        // Cloud gaps modulate ray brightness
-        float rayOcclusion = 1.0 - cloudOcclusion * 0.7;
-        rayOcclusion = max(rayOcclusion, 0.3);
-
-        // Rays visible mainly near and below horizon
-        float rayHeightMask = smoothstep(0.5, 0.0, dir.y) * smoothstep(-0.4, -0.1, dir.y);
-
-        vec3 rayColor = vec3(0.7, 0.35, 0.15);
-        base += rayColor * rays * rayFalloff * rayOcclusion * rayHeightMask * 0.2;
+          vec3 rayColor = vec3(0.7, 0.35, 0.15);
+          base += rayColor * rays * rayFalloff * rayOcclusion * rayHeightMask * 0.2;
+        }
 
         float vignette = 1.0 - smoothstep(0.15, 1.0, length(dir.xz) * 0.85);
         base += vec3(0.07, 0.025, 0.09) * vignette * 0.28;
