@@ -1490,7 +1490,7 @@ function MonolithScene() {
 export default function MonolithCanvas() {
   return (
     <SafeCanvas
-      dpr={[0.75, 1.5]}
+      dpr={0.75}
       rendererOptions={{ antialias: false, alpha: true }}
       sceneLabel="Monolith"
       showFrameRateOverlay

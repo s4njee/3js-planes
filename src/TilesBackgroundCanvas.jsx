@@ -28,8 +28,8 @@ import { publishBackgroundPerformanceSnapshot } from './shared/performance/index
 const ION_KEY = import.meta.env.VITE_CESIUM_ION_TOKEN;
 const DEG2RAD = Math.PI / 180;
 const MIN_BACKGROUND_DPR = 0.75;
-const MEDIUM_BACKGROUND_DPR = 1;
-const MAX_BACKGROUND_DPR = 1.25;
+const MEDIUM_BACKGROUND_DPR = 0.75;
+const MAX_BACKGROUND_DPR = 0.75;
 const BACKGROUND_DPR_EPSILON = 0.01;
 const BACKGROUND_DPR_SUSTAIN_MS = 2500;
 const BACKGROUND_QUALITY_HIGH = 'high';

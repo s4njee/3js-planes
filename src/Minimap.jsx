@@ -86,13 +86,29 @@ export default function Minimap() {
       .addTo(map);
 
     let raf;
-    const tick = () => {
+    let lastUpdate = 0;
+    const UPDATE_INTERVAL = 1000 / 15; // 15 Hz
+    let lastMapCenter = [initLon, initLat];
+    const CENTER_THRESHOLD = 0.0001; // roughly 10m at the equator
+
+    const tick = (time) => {
+      raf = requestAnimationFrame(tick);
+
+      if (time - lastUpdate < UPDATE_INTERVAL) return;
+      lastUpdate = time;
+
       const lon = flightState.lon * RAD2DEG;
       const lat = flightState.lat * RAD2DEG;
       marker.setLngLat([lon, lat]);
       marker.setRotation(flightState.heading * RAD2DEG);
-      map.setCenter([lon, lat]);
-      raf = requestAnimationFrame(tick);
+
+      const dist = Math.sqrt(
+        Math.pow(lon - lastMapCenter[0], 2) + Math.pow(lat - lastMapCenter[1], 2),
+      );
+      if (dist > CENTER_THRESHOLD) {
+        map.setCenter([lon, lat]);
+        lastMapCenter = [lon, lat];
+      }
     };
     raf = requestAnimationFrame(tick);
 

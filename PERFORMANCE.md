@@ -1,14 +1,125 @@
 # Performance Ideas
 
+## GPU Offload & Advanced Optimizations
+
+These ideas go beyond parameter tuning — they move work to the GPU, reduce draw calls, or restructure rendering to unlock fundamentally better frame budgets.
+
+### G. Move sky dome FBM noise to a baked lookup texture
+
+The sky dome fragment shader runs 5-octave FBM noise (each octave = 8 trilinear hash lookups) for nebula wisps, cloud layers, and god rays — per fragment, every frame. At 0.75 DPR on a 1440p display that's still ~1.5M fragments hitting this shader.
+
+- Bake the FBM into a 512×512 RGBA tileable noise texture at build time or on first load.
+- Replace the `noise()` / `fbm()` calls with a single `texture2D` lookup — one sample vs ~40 hash+lerp operations.
+- The `time` uniform can scroll UV coordinates to preserve animation.
+- God ray angular noise can use the same texture with a different UV mapping.
+- Estimated savings: 60-80% of the sky dome fragment cost.
+
+### H. Replace per-sprite cloud field with GPU instanced mesh
+
+When `CLOUDS_ENABLED` is re-enabled, the cloud field iterates 200 sprites (5 layers × 40) on the CPU every frame: position updates, axis-angle rotation, density accumulation. Each sprite is a separate draw call.
+
+- Replace with `THREE.InstancedMesh` using a single quad geometry and an instance attribute buffer for position/scale/opacity/scrollSpeed.
+- Move scrolling, yaw rotation, and wrap-around into the vertex shader using uniforms (`time`, `deltaYaw`, `scrollSpeed`).
+- Density accumulation can be approximated in a single GPU readback or replaced with a shader-based depth fog.
+- Reduces 200 draw calls to 1, eliminates the CPU forEach loop entirely.
+
+### I. Compute autopilot heading on the GPU via transform feedback
+
+The autopilot `tickAutopilot()` runs `atan2`, `sqrt`, and angle normalization on the CPU every frame. While cheap individually, this pattern scales poorly if more flight entities are added (e.g., AI wingmen, traffic).
+
+- Encode flight state (lat, lon, heading, target) into a small float texture or buffer.
+- Use a transform feedback pass or a tiny compute-like fragment shader to output the new heading.
+- Read back via `gl.readPixels` on a 1×1 texture (async with `getBufferSubData` for zero-stall readback).
+- This is more of a future-proofing pattern than an immediate win, but it demonstrates the GPU offload approach.
+
+### J. Throttle sun direction to longitude-change threshold
+
+`updateSunDirection()` calls `getSunDirectionECEF()` every frame, which involves `Date` construction and trig. The sun position only changes meaningfully when longitude shifts by ~0.5°.
+
+- Cache the last longitude used for sun computation.
+- Only recompute when `|currentLon - lastSunLon| > 0.0087` radians (~0.5°).
+- At cruise speed this means sun updates every ~2-3 seconds instead of 60/s.
+- Zero visual difference, saves a `Date` allocation + trig per frame.
+
+### K. Use GPU-driven LOD for 3D tiles via error target scaling
+
+The `3d-tiles-renderer` selects tile LOD based on screen-space error. At 0.75 DPR, the renderer is still selecting tiles as if rendering at full resolution.
+
+- Scale the tile error target inversely with DPR: `tiles.errorTarget = baseError / backgroundDpr`.
+- This tells the tile renderer to accept coarser tiles when rendering at lower resolution, reducing tile count, network requests, and GPU draw calls proportionally.
+- Combine with `tiles.maxDepth` to hard-cap tile tree depth during fast travel.
+
+### L. Defer foreground EffectComposer normal pass
+
+`SharedEffectStack` always enables `enableNormalPass` on the `EffectComposer`, which renders the entire scene a second time into a normal buffer. This pass is only needed by volumetric clouds and aerial perspective — neither of which is active in the default foreground config.
+
+- Only enable `enableNormalPass` when `volumetricCloudsEnabled` is true.
+- For the common case (bloom + scanlines + barrel blur), this eliminates an entire scene render pass.
+- Estimated savings: ~30-40% of the foreground render cost when the composer is active.
+
+### M. Batch heat shimmer into a single draw call
+
+The heat shimmer creates 2 separate `CylinderGeometry` meshes with the same `ShaderMaterial`. Each is a separate draw call with its own vertex buffer.
+
+- Merge both cylinder geometries into a single `BufferGeometry` using `BufferGeometryUtils.mergeGeometries()`.
+- Pass engine position offsets as a per-vertex attribute or uniform array.
+- Reduces 2 draw calls to 1 and halves the state-change overhead.
+
+### N. Skip inactive shader branches with uniform guards
+
+Several shaders (sky dome, heat shimmer, x-ray) contain expensive branches that run even when their visual contribution is zero:
+
+- Heat shimmer: the fragment shader runs full noise even when `boostIntensity < 0.01` (only discards at the end).
+- Sky dome god rays: compute ray occlusion and angular noise even when the sun is behind the camera.
+- X-ray: vertex distortion runs even when `xrayPulse` is 0.
+
+Add early `return` / `discard` guards at the top of these shaders keyed on the relevant uniform. GPU branch prediction on modern hardware makes uniform-based early-out nearly free.
+
+### O. Render background at half-rate during idle
+
+When the aircraft is stationary (no keyboard input, no autopilot), the background scene is static — tiles don't move, clouds drift slowly, sun doesn't change. Rendering it at 60fps is wasted work.
+
+- Track an `isIdle` flag: true when no input keys are pressed, autopilot is inactive, and velocity is zero.
+- During idle, render the background every other frame (30fps) or every third frame (20fps).
+- The foreground aircraft scene can continue at full rate for smooth animation mixer playback.
+- On the skipped frames, the previous background frame persists in the canvas — visually imperceptible for a static scene.
+
+### P. Use KTX2/Basis Universal for cloud and noise textures
+
+The cloud system loads raw binary 3D textures (`shapeTexture`, `shapeDetailTexture`) and 2D textures (`localWeatherTexture`, `turbulenceTexture`). These are uncompressed in GPU memory.
+
+- Convert to KTX2 with Basis Universal compression (ETC1S or UASTC).
+- GPU-compressed textures use 4-8x less VRAM and have faster upload times.
+- Three.js supports KTX2 via `KTX2Loader` with WASM transcoder.
+- Smaller textures also mean less bandwidth pressure on integrated GPUs with shared memory.
+
+### Q. Pool and reuse materials across aircraft models
+
+Each GLB model loads with its own set of `MeshStandardMaterial` instances. When switching aircraft, the old materials are disposed and new ones compiled — causing shader compilation stutter.
+
+- Build a material pool keyed on material properties (metalness, roughness, map hash).
+- When loading a new model, check the pool before creating new materials.
+- Pre-warm the shader cache by compiling common material variants at startup using `renderer.compile()`.
+- Eliminates the 200-500ms shader compilation hitch on first model switch.
+
+### R. Move terrain noise generation to a GPU compute pass
+
+When `TERRAIN_ENABLED` is re-enabled, `terrain.js` runs 7-octave FBM noise on the CPU for a 40×40 grid per tile (1600 vertices × 7 octaves × multiple noise layers = ~50K noise evaluations per tile). This blocks the main thread during tile generation.
+
+- Port the noise functions to a fragment shader that renders heightfield values into a float texture.
+- Read the texture back to CPU for geometry construction, or use it directly as a displacement map in the vertex shader.
+- A 64×64 float texture rendered in a single quad pass would replace all CPU noise work for one tile in <0.1ms GPU time.
+- Alternatively, use the displacement map approach and skip CPU readback entirely — the vertex shader samples the heightfield texture and displaces vertices in real time.
+
 ## Next FPS Ideas
 
 These are the next places worth testing before doing more broad refactors. They are ordered by likely FPS impact and implementation risk.
-
+...
 ### A. Add adaptive DPR to the background renderer
 
 The foreground `SafeCanvas` can now step down to DPR `0.75`, and `TilesBackgroundCanvas` now has matching adaptive scaling for the expensive tiles/clouds/atmosphere passes.
 
-Status: implemented. `TilesBackgroundCanvas` now adapts background DPR through `1.25 -> 1 -> 0.75`, resyncs tile resolution after DPR changes, and reports background quality/DPR in the existing FPS meter.
+Status: implemented. `TilesBackgroundCanvas` now adapts background DPR through `1 -> 0.75`, resyncs tile resolution after DPR changes, and reports background quality/DPR in the existing FPS meter.
 
 Follow-up ideas:
 
@@ -29,6 +140,8 @@ Ideas:
 
 `TileCreasedNormalsPlugin` runs `toCreasedNormals` on streamed tile geometry. That can cause both CPU spikes and GC while tiles stream in.
 
+Status: implemented. Added `BACKGROUND_TILE_CREASED_NORMALS_DEFAULT` (false) and a GUI toggle. The plugin now skips processing if disabled, reducing load-time overhead.
+
 Ideas:
 
 - Add a feature flag around `TileCreasedNormalsPlugin` and test FPS/frame pacing with it off.
@@ -38,6 +151,8 @@ Ideas:
 ### D. Throttle the minimap loop
 
 `Minimap.jsx` still updates with `requestAnimationFrame`, including marker position, marker rotation, and `map.setCenter`. That is not the biggest GPU cost, but it can compete on the main thread.
+
+Status: implemented. Throttled update loop to 15 Hz and added a movement threshold for `map.setCenter` calls to reduce main-thread pressure.
 
 Ideas:
 
@@ -78,11 +193,11 @@ That architecture gives clean layering, but it is expensive because both rendere
 
 `TilesBackgroundCanvas` calls `renderer.setPixelRatio(window.devicePixelRatio)`, and `MonolithCanvas` uses `Math.min(window.devicePixelRatio, 2)`. On Retina/HiDPI displays this can multiply fragment cost by 4x.
 
-Status: initial implementation is in place. `TilesBackgroundCanvas` caps the background renderer at `1.25`, and `MonolithCanvas` now uses `SafeCanvas` with adaptive `dpr={[0.75, 1.5]}`.
+Status: initial implementation is in place. `TilesBackgroundCanvas` caps the background renderer at `1.0`, and `MonolithCanvas` now uses `SafeCanvas` with adaptive `dpr={[0.75, 1.0]}`.
 
 Ideas:
 
-- Tune the `1.25` background cap and `1.5` foreground cap after measuring visual quality and FPS.
+- Tune the `1.0` background cap and `1.0` foreground cap after measuring visual quality and FPS.
 - Use a lower cap for the background than the aircraft foreground because tiles, atmosphere, and clouds are visually forgiving.
 - Add a similar FPS-driven DPR stepper to `TilesBackgroundCanvas`, or share the performance context between both scenes.
 
@@ -150,7 +265,7 @@ For R3F, consider `frameloop="demand"` only for static modes. The main aircraft 
 - Adaptive DPR stepping.
 - Optional FPS HUD.
 
-Status: implemented. `MonolithCanvas` now uses `SafeCanvas` with `dpr={[0.75, 1.5]}`, the direct `window.devicePixelRatio` override is gone, and foreground antialiasing is disabled through `rendererOptions={{ antialias: false, alpha: true }}`.
+Status: implemented. `MonolithCanvas` now uses `SafeCanvas` with `dpr={[0.75, 1.0]}`, the direct `window.devicePixelRatio` override is gone, and foreground antialiasing is disabled through `rendererOptions={{ antialias: false, alpha: true }}`.
 
 Recommended direction:
 
@@ -281,7 +396,7 @@ Ideas:
 ## Measurement Plan
 
 1. Add a visible FPS/debug overlay for both renderers.
-2. Record baseline FPS at DPR 0.75, 1, 1.25, 1.5, and 2.
+2. Record baseline FPS at DPR 0.75 and 1.
 3. Test with effects disabled one at a time: clouds, lens flare, SMAA, foreground composer, minimap.
 4. Separate first-load stutter from steady-state FPS.
 5. Use Chrome Performance and WebGL inspector data to classify CPU-bound vs GPU-bound frames.
@@ -296,8 +411,8 @@ Suggested baseline scenarios:
 
 ## Recommended First Sprint
 
-1. Cap `TilesBackgroundCanvas` DPR to `1.25`.
-2. Move `MonolithCanvas` to `SafeCanvas` with `dpr={[0.75, 1.5]}`.
+1. Cap `TilesBackgroundCanvas` DPR to `1.0`.
+2. Move `MonolithCanvas` to `SafeCanvas` with `dpr={[0.75, 1.0]}`.
 3. Add a simple `quality` state for `TilesBackgroundCanvas` and disable lens flare/SMAA on low FPS.
 4. Throttle `Minimap` to 10-15 Hz.
 5. Remove obvious per-frame allocations in `MonolithCanvas`.
