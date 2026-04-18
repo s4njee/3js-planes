@@ -48,14 +48,20 @@ export function createDefaultGuiParams() {
     scanlineDensity: 5.13,
     scanlineOpacity: 0.75,
     scanlineScrollSpeed: 0.08,
-    exposure: 1.4,
+    exposure: 1.1,
     toneMapping: 'ACESFilmic',
     ambientOverrideEnabled: true,
-    ambientIntensity: 0.78,
+    ambientIntensity: 0.52,
     ambientColor: '#ffffff',
-    backgroundColor: '#111111',
+    backgroundColor: '#050709',
     whiteMode: false,
-    lightingMode: lightingModes[0],
+    lightingMode: lightingModes[1],
+    modelRotationX: 0.0,
+    modelRotationY: -1.58,
+    modelRotationZ: 0.021592653589793,
+    shimmerOffsetX: 6.13,
+    shimmerOffsetY: 0.41,
+    shimmerOffsetZ: 1.4,
   };
 }
 
@@ -63,13 +69,17 @@ export function createDefaultGuiParams() {
 
 export function createGuiControls({
   guiParams,
+  models,
+  getCurrentModelIndex,
   renderer,
   scene,
   onChromaticAberrationChange,
+  onEngineShimmerChange,
   onEffectSettingsChange,
   onWhiteModeChange,
   onLightingModeChange,
   onTriggerGlitch,
+  onModelRotationChange,
 }) {
   const lightingModes = ['A (Scene)', 'B (Particles)'];
 
@@ -152,6 +162,83 @@ export function createGuiControls({
     onLightingModeChange(Math.max(lightingModes.indexOf(value), 0));
   });
 
+  const transformFolder = gui.addFolder('Model Transform');
+  transformFolder.add(guiParams, 'modelRotationX', -Math.PI, Math.PI, 0.01).name('Rotation X').onChange(onModelRotationChange);
+  transformFolder.add(guiParams, 'modelRotationY', -Math.PI, Math.PI, 0.01).name('Rotation Y').onChange(onModelRotationChange);
+  transformFolder.add(guiParams, 'modelRotationZ', -Math.PI, Math.PI, 0.01).name('Rotation Z').onChange(onModelRotationChange);
+
+  const shimmerFolder = gui.addFolder('Shimmer Transform');
+  shimmerFolder.add(guiParams, 'shimmerOffsetX', -10, 10, 0.01).name('Offset X (Front/Back)');
+  shimmerFolder.add(guiParams, 'shimmerOffsetY', -10, 10, 0.01).name('Offset Y (Up/Down)');
+  shimmerFolder.add(guiParams, 'shimmerOffsetZ', 0, 10, 0.01).name('Offset Z (Spread)');
+
+  const engineShimmerFolder = gui.addFolder('Engine Shimmers');
+  const engineShimmerSubfolders = [];
+
+  function removeFolderRecursive(folder) {
+    const childFolders = folder.foldersRecursive ? folder.foldersRecursive() : [];
+    childFolders.reverse().forEach((childFolder) => {
+      if (childFolder !== folder) {
+        childFolder.destroy();
+      }
+    });
+    folder.destroy();
+  }
+
+  function rebuildEngineShimmerFolder() {
+    engineShimmerSubfolders.splice(0).forEach((folder) => {
+      removeFolderRecursive(folder);
+    });
+
+    models.forEach((model, modelIndex) => {
+      const modelFolder = engineShimmerFolder.addFolder(model.name);
+      engineShimmerSubfolders.push(modelFolder);
+      const shimmerActions = {
+        addShimmer: () => {
+          if (!Array.isArray(model.engineShimmers)) {
+            model.engineShimmers = [];
+          }
+          model.engineShimmers.push({ x: 6.13, y: 0.41, z: 0.0 });
+          rebuildEngineShimmerFolder();
+          onEngineShimmerChange(modelIndex);
+        },
+        removeLast: () => {
+          if (!Array.isArray(model.engineShimmers) || model.engineShimmers.length === 0) return;
+          model.engineShimmers.pop();
+          rebuildEngineShimmerFolder();
+          onEngineShimmerChange(modelIndex);
+        },
+      };
+
+      modelFolder.add(shimmerActions, 'addShimmer').name('Add Shimmer');
+      modelFolder.add(shimmerActions, 'removeLast').name('Remove Last');
+
+      if (!Array.isArray(model.engineShimmers) || model.engineShimmers.length === 0) {
+        modelFolder.add({ shimmers: 'No shimmers configured' }, 'shimmers').name('Status');
+        return;
+      }
+
+      model.engineShimmers.forEach((shimmer, shimmerIndex) => {
+        const shimmerConfigFolder = modelFolder.addFolder(`Shimmer ${shimmerIndex + 1}`);
+        shimmerConfigFolder.add(shimmer, 'x', -10, 10, 0.01).name('X').onChange(() => {
+          onEngineShimmerChange(modelIndex);
+        });
+        shimmerConfigFolder.add(shimmer, 'y', -10, 10, 0.01).name('Y').onChange(() => {
+          onEngineShimmerChange(modelIndex);
+        });
+        shimmerConfigFolder.add(shimmer, 'z', -10, 10, 0.01).name('Z').onChange(() => {
+          onEngineShimmerChange(modelIndex);
+        });
+      });
+
+      if (getCurrentModelIndex() === modelIndex) {
+        modelFolder.open();
+      }
+    });
+  }
+
+  rebuildEngineShimmerFolder();
+
   // ── Panel show/hide helpers ─────────────────────────────────────────────────────
 
   let guiVisible = false;
@@ -171,6 +258,7 @@ export function createGuiControls({
   return {
     destroy: () => gui.destroy(),
     guiParams,
+    rebuildEngineShimmerFolder,
     syncGuiDisplay,
     toggleGUI,
   };
