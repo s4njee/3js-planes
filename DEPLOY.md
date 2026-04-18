@@ -1,18 +1,54 @@
 # Deploy
 
-Site is hosted on S3 at `planes.s8njee.com` behind CloudFront distribution `E2V8EAB3MTM09M`.
+This project is deployed to Cloudflare Pages with Wrangler.
 
-## Deploy steps
+Current production project:
+- Pages project: `planes`
+- Production domain: `af1.s8njee.com`
+- Default `*.pages.dev` URL: `https://planes-czq.pages.dev`
+
+## Prerequisites
+
+- Logged into Cloudflare with `wrangler login`
+- A successful local build
+
+You can verify the account with:
 
 ```bash
-# 1. Build
-npm run build
-
-# 2. Sync to S3 (--delete removes files no longer in dist)
-aws s3 sync dist/ s3://planes.s8njee.com/ --delete
-
-# 3. Invalidate CloudFront cache
-aws cloudfront create-invalidation --distribution-id E2V8EAB3MTM09M --paths "/*"
+npx wrangler whoami
 ```
 
-The invalidation typically completes within 1–2 minutes. The site is live at https://planes.s8njee.com.
+## Production deploy
+
+```bash
+npm run build
+npx wrangler pages deploy dist/ --project-name planes
+```
+
+That uploads the contents of `dist/` and publishes a new production deployment for the `planes` Pages project. Cloudflare Pages automatically handles cache invalidation, so there is no separate purge step.
+
+## Preview deploy
+
+To publish the current branch as a preview deployment:
+
+```bash
+npm run build
+npx wrangler pages deploy dist/ --project-name planes --branch "$(git branch --show-current)"
+```
+
+The preview URL follows the pattern `<branch>.<project>.pages.dev`.
+
+## Domain
+
+The `planes` Pages project already has `af1.s8njee.com` attached as a custom domain in Cloudflare. If that mapping ever needs to be recreated, do it in the Cloudflare dashboard:
+
+1. Open the `planes` Pages project
+2. Go to `Settings`
+3. Open `Custom domains`
+4. Add `af1.s8njee.com`
+
+## Notes
+
+- Content-hashed JS and CSS assets are cached aggressively by Cloudflare Pages.
+- Binary assets from `public/` are not hashed by Vite, so the app uses versioned asset URLs to ensure updates are fetched.
+- If you need the longer-form Cloudflare notes, see [CLOUDFLARE.md](./CLOUDFLARE.md).
