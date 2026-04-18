@@ -70,9 +70,19 @@ import { createContrails } from './monolith/contrails.js';
 import { createHeatShimmerGroup } from './monolith/heat-shimmer.js';
 import CesiumTilesBackground from './monolith/CesiumTilesBackground.jsx';
 import { flightState } from './flight-store.js';
-import { scenePositionToCartographic } from './monolith/cesium-geospatial.js';
+import { shouldSuppressGlobalShortcuts } from './keyboard-shortcuts.js';
+import {
+  cartographicToScenePosition,
+  CESIUM_TERRAIN_SCENE_SCALE,
+  scenePositionToCartographic,
+} from './monolith/cesium-geospatial.js';
+import { flightCommandState } from './flight-store.js';
 import { createInitialFlightControl, createInitialMonolithState } from './monolith/flight-state.js';
 import { createMonolithEffectSnapshot, canTriggerMonolithGlitch } from './monolith/effects.js';
+
+const teleportScenePositionScratch = new THREE.Vector3();
+const teleportAnchorOffsetScratch = new THREE.Vector3();
+const teleportRotationScratch = new THREE.Matrix4();
 
 // ── Shared effects ─────────────────────────────────────────────────────────────
 
@@ -130,6 +140,7 @@ function MonolithScene() {
     particleIndex: 0,
     lastWorldYaw: 0,
   });
+  const appliedTeleportVersionRef = useRef(flightCommandState.teleportVersion);
   const terrainTilesRef = useRef([]);
   const flightControlRef = useRef(createInitialFlightControl());
   const stateRef = useRef(createInitialMonolithState());
@@ -146,6 +157,7 @@ function MonolithScene() {
 
   const currentSetDef = () => MODEL_SET_DEF;
   const currentModels = () => currentSetDef().models;
+  const getCurrentModelDef = () => currentModels()[stateRef.current.currentModelIndex] ?? null;
   const supportsAnimationSpeedBoost = () => Boolean(currentSetDef().supportsAnimationSpeedBoost);
   const getLightingModeLabel = (mode) => LIGHTING_MODE_LABELS[mode] ?? LIGHTING_MODE_LABELS[0];
   const getEffectiveWhiteMode = () => stateRef.current.whiteMode;
@@ -341,13 +353,56 @@ function MonolithScene() {
     monolithRef.current.rotateY(-flightControlRef.current.yawOffset);
     monolithRef.current.rotateZ(flightControlRef.current.pitchOffset);
 
-    const cartographic = scenePositionToCartographic(monolithRef.current.position);
+    monolithRef.current.updateMatrixWorld(true);
+    const geoAnchor = monolithRef.current.userData.monolithGeoAnchor;
+    const worldAnchor = geoAnchor instanceof THREE.Vector3
+      ? geoAnchor.clone()
+      : monolithRef.current.position.clone();
+    monolithRef.current.localToWorld(worldAnchor);
+
+    const cartographic = scenePositionToCartographic(worldAnchor);
     if (cartographic) {
       flightState.lat = cartographic.lat;
       flightState.lon = cartographic.lon;
       flightState.alt = cartographic.height;
       flightState.heading = -Math.PI / 2 - flightControlRef.current.worldYaw;
     }
+  };
+
+  const applyPendingTeleport = () => {
+    if (!monolithRef.current) return false;
+    if (flightCommandState.teleportVersion === appliedTeleportVersionRef.current) return false;
+
+    const targetScenePosition = cartographicToScenePosition({
+      lat: flightCommandState.teleportLat,
+      lon: flightCommandState.teleportLon,
+      height: flightCommandState.teleportAlt,
+    }, teleportScenePositionScratch);
+
+    const planeGeoAnchor = monolithRef.current.userData.monolithGeoAnchor;
+    if (!targetScenePosition || !(planeGeoAnchor instanceof THREE.Vector3)) return false;
+
+    teleportRotationScratch.compose(
+      new THREE.Vector3(0, 0, 0),
+      monolithRef.current.quaternion,
+      monolithRef.current.scale,
+    );
+    teleportAnchorOffsetScratch.copy(planeGeoAnchor).applyMatrix4(teleportRotationScratch);
+
+    monolithBasePositionRef.current.copy(targetScenePosition);
+    monolithBasePositionRef.current.y -= flightControlRef.current.elevationOffset;
+    monolithBasePositionRef.current.sub(teleportAnchorOffsetScratch);
+
+    flightControlRef.current.worldYaw = -Math.PI / 2 - flightCommandState.teleportHeading;
+    flightControlRef.current.lastWorldYaw = flightControlRef.current.worldYaw;
+    flightControlRef.current.targetYawOffset = 0;
+    flightControlRef.current.yawOffset = 0;
+    flightControlRef.current.bankOffset = 0;
+    flightControlRef.current.pitchOffset = 0;
+
+    appliedTeleportVersionRef.current = flightCommandState.teleportVersion;
+    applyMonolithTransform();
+    return true;
   };
 
   // ── Model swap ────────────────────────────────────────────────────────────
@@ -975,6 +1030,7 @@ function MonolithScene() {
     });
 
     const onKeyDown = (event) => {
+      if (shouldSuppressGlobalShortcuts(event)) return;
       if (event.code === 'Space') {
         if (event.repeat || !supportsAnimationSpeedBoost()) return;
         event.preventDefault();
@@ -1028,6 +1084,7 @@ function MonolithScene() {
     };
 
     const onKeyUp = (event) => {
+      if (shouldSuppressGlobalShortcuts(event)) return;
       if (event.code === 'Space' && supportsAnimationSpeedBoost()) {
         setAnimationSpeedBoost(false);
         return;
@@ -1129,6 +1186,15 @@ function MonolithScene() {
     const elapsed = clockRef.current.getElapsedTime();
     const boostVisualState = boostVisualStateRef.current;
     const boostShakeOffset = boostVisualState.lastShakeOffset;
+    const currentModel = getCurrentModelDef();
+    const sr71BoostMotionScale = (
+      supportsAnimationSpeedBoost()
+      && stateRef.current.animationSpeedBoostEnabled
+      && currentModel?.name === 'SR-71'
+      && Number.isFinite(currentModel.realisticBoostSpeedMps)
+    )
+      ? (currentModel.realisticBoostSpeedMps * CESIUM_TERRAIN_SCENE_SCALE) / TERRAIN_SCROLL_SPEED
+      : null;
     const boostTarget = (
       supportsAnimationSpeedBoost() && stateRef.current.animationSpeedBoostEnabled
     ) ? 1 : 0;
@@ -1138,8 +1204,16 @@ function MonolithScene() {
       boostShakeOffset.set(0, 0, 0);
     }
 
+    applyPendingTeleport();
+
     // ── Camera follow ───────────────────────────────────────────────────
-    const planePos = monolithRef.current?.position ?? new THREE.Vector3();
+    const planeGeoAnchor = monolithRef.current?.userData.monolithGeoAnchor;
+    const planePos = planeGeoAnchor instanceof THREE.Vector3
+      ? planeGeoAnchor.clone()
+      : (monolithRef.current?.position ?? new THREE.Vector3());
+    if (monolithRef.current) {
+      monolithRef.current.localToWorld(planePos);
+    }
     const camRadius = 14;
     const camBaseY = 5.0;
     const targetCamX = planePos.x;
@@ -1240,7 +1314,9 @@ function MonolithScene() {
 
     // ── Ocean ───────────────────────────────────────────────────────────
     if (OCEAN_ENABLED && oceanRef.current) {
-      const oceanSpeed = CLOUD_SCROLL_SPEED * (1 + boostVisualState.intensity * 1.8);
+      const oceanSpeed = CLOUD_SCROLL_SPEED * (
+        sr71BoostMotionScale ?? (1 + boostVisualState.intensity * 1.8)
+      );
       oceanRef.current.material.uniforms.scrollOffset.value += oceanSpeed * delta;
       oceanRef.current.material.uniforms.time.value = elapsed;
       oceanRef.current.material.uniforms.yaw.value = flightControlRef.current.worldYaw;
@@ -1251,7 +1327,9 @@ function MonolithScene() {
     if (CLOUDS_ENABLED && cloudFieldRef.current) {
       let densityAccumulator = 0;
       const monolithY = monolithRef.current?.position.y ?? 0;
-      const cloudSpeed = CLOUD_SCROLL_SPEED * (1 + boostVisualState.intensity * 1.8);
+      const cloudSpeed = CLOUD_SCROLL_SPEED * (
+        sr71BoostMotionScale ?? (1 + boostVisualState.intensity * 1.8)
+      );
       const deltaYaw = flightControl.worldYaw - flightControl.lastWorldYaw;
       const yAxis = new THREE.Vector3(0, 1, 0);
 
@@ -1290,7 +1368,9 @@ function MonolithScene() {
 
     // ── Contrails ───────────────────────────────────────────────────────
     if (contrailsRef.current) {
-      const contrailSpeed = CLOUD_SCROLL_SPEED * 1.5 * (1 + boostVisualState.intensity * 2.5);
+      const contrailSpeed = CLOUD_SCROLL_SPEED * 1.5 * (
+        sr71BoostMotionScale ?? (1 + boostVisualState.intensity * 2.5)
+      );
       const deltaYaw = flightControl.worldYaw - flightControl.lastWorldYaw;
       const yAxis = new THREE.Vector3(0, 1, 0);
 
@@ -1358,7 +1438,9 @@ function MonolithScene() {
 
     // ── Terrain scrolling ───────────────────────────────────────────────
     if (TERRAIN_ENABLED && terrainTilesRef.current.length > 0) {
-      const scrollSpeed = TERRAIN_SCROLL_SPEED * (1 + boostVisualState.intensity * 2.6);
+      const scrollSpeed = TERRAIN_SCROLL_SPEED * (
+        sr71BoostMotionScale ?? (1 + boostVisualState.intensity * 2.6)
+      );
       const wrapThreshold = TERRAIN_TILE_LENGTH * 0.75;
       let furthestBackZ = Infinity;
       let furthestBackLogicalZ = Infinity;

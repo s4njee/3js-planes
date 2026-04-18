@@ -20,7 +20,7 @@ import {
 // them as a terrain background below the aircraft.
 //
 // The tiles are in ECEF (metres). We transform the tiles group so that:
-//   - The ENU "up" at our chosen lat/lon aligns with scene +Y
+//   - The ENU "up" at our chosen Tokyo lat/lon aligns with scene +Y
 //   - The terrain surface sits at Y = TERRAIN_Y in scene space
 //   - 1 metre of real terrain = SCENE_SCALE scene units
 //

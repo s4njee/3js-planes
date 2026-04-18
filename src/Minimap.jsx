@@ -20,11 +20,12 @@ const CONTAINER_STYLE = {
   background: '#111',
 };
 
-// Plane silhouette pointing up (north). Stroke uses currentColor so we can
-// recolor via CSS.
+// Top-down plane silhouette pointing up (north). The fuselage is longer than
+// the wings so the marker reads as an aircraft instead of a symmetric X.
 const PLANE_SVG = `
-<svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" fill="currentColor">
-  <path d="M12 1.5 L13.4 9 L22 12 L13.4 15 L12 22.5 L10.6 15 L2 12 L10.6 9 Z"/>
+<svg viewBox="0 0 32 32" xmlns="http://www.w3.org/2000/svg" fill="currentColor">
+  <path d="M15 1.5c0-.8.7-1.5 1.5-1.5S18 0.7 18 1.5V8l6.6 2.6c1.3.5 2.2 1.7 2.2 3.1s-.9 2.6-2.2 3.1L18 19.4v7.1l2.8 4.2c.5.7.3 1.7-.4 2.2-.7.5-1.7.3-2.2-.4L16 29.9l-2.2 2.6c-.5.7-1.5.9-2.2.4-.7-.5-.9-1.5-.4-2.2l2.8-4.2v-7.1L7.6 16.8c-1.3-.5-2.2-1.7-2.2-3.1s.9-2.6 2.2-3.1L14 8V1.5z"/>
+  <path d="M5 15.5c0-.8.7-1.5 1.5-1.5H12l1.4-2.8c.4-.8 1.3-1.1 2.1-.7.8.4 1.1 1.3.7 2.1L15.5 14h1l-.7-1.4c-.4-.8-.1-1.7.7-2.1.8-.4 1.7-.1 2.1.7L20 14h5.5c.8 0 1.5.7 1.5 1.5S26.3 17 25.5 17H20l-1.4 2.8c-.4.8-1.3 1.1-2.1.7-.8-.4-1.1-1.3-.7-2.1l.7-1.4h-1l.7 1.4c.4.8.1 1.7-.7 2.1-.8.4-1.7.1-2.1-.7L12 17H6.5C5.7 17 5 16.3 5 15.5z"/>
 </svg>`;
 
 const STYLE = {
@@ -47,6 +48,7 @@ export default function Minimap() {
   useEffect(() => {
     const initLon = flightState.lon * RAD2DEG;
     const initLat = flightState.lat * RAD2DEG;
+    let isUserInteracting = false;
 
     const map = new maplibregl.Map({
       container: containerRef.current,
@@ -58,7 +60,23 @@ export default function Minimap() {
       dragRotate: false,
       pitchWithRotate: false,
     });
-    map.scrollZoom.disable();
+    map.scrollZoom.enable();
+    map.dragPan.enable();
+
+    const markInteractionStart = () => {
+      isUserInteracting = true;
+    };
+
+    const markInteractionEnd = () => {
+      window.setTimeout(() => {
+        isUserInteracting = false;
+      }, 0);
+    };
+
+    map.on('dragstart', markInteractionStart);
+    map.on('dragend', markInteractionEnd);
+    map.on('zoomstart', markInteractionStart);
+    map.on('zoomend', markInteractionEnd);
 
     const el = document.createElement('div');
     el.innerHTML = PLANE_SVG;
@@ -77,13 +95,19 @@ export default function Minimap() {
       const lat = flightState.lat * RAD2DEG;
       marker.setLngLat([lon, lat]);
       marker.setRotation(flightState.heading * RAD2DEG);
-      map.setCenter([lon, lat]);
+      if (!isUserInteracting) {
+        map.setCenter([lon, lat]);
+      }
       raf = requestAnimationFrame(tick);
     };
     raf = requestAnimationFrame(tick);
 
     return () => {
       cancelAnimationFrame(raf);
+      map.off('dragstart', markInteractionStart);
+      map.off('dragend', markInteractionEnd);
+      map.off('zoomstart', markInteractionStart);
+      map.off('zoomend', markInteractionEnd);
       map.remove();
     };
   }, []);

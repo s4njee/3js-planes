@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef } from 'react';
 import * as THREE from 'three';
 import GUI from 'lil-gui';
 import { DRACOLoader } from 'three/addons/loaders/DRACOLoader.js';
@@ -20,37 +20,15 @@ import { AerialPerspectiveEffect, PrecomputedTexturesGenerator, getSunDirectionE
 import { STBNLoader, DEFAULT_STBN_URL } from '@takram/three-geospatial';
 import { DitheringEffect, LensFlareEffect } from '@takram/three-geospatial-effects';
 import { resolveAssetUrl } from './monolith/asset-url.js';
-import { flightState } from './flight-store.js';
+import { flightState, requestFlightTeleport } from './flight-store.js';
+import CitySearch from './CitySearch.jsx';
+import { shouldSuppressGlobalShortcuts } from './keyboard-shortcuts.js';
 
 const ION_KEY = import.meta.env.VITE_CESIUM_ION_TOKEN;
 const DEG2RAD = Math.PI / 180;
 
-const AIRPORTS = [
-  { label: 'A', name: 'New York JFK',   lat: 40.6413, lon: -73.7781 },
-  { label: 'B', name: 'Los Angeles LAX', lat: 33.9425, lon: -118.4081 },
-  { label: 'C', name: 'Chicago O\'Hare', lat: 41.9742, lon: -87.9073 },
-  { label: 'D', name: 'Dallas DFW',      lat: 32.8998, lon: -97.0403 },
-];
-
-const NAV_STYLE = {
-  position: 'fixed', top: 16, right: 16, zIndex: 10,
-  display: 'flex', gap: 8,
-};
-
-const BTN_STYLE = (active) => ({
-  padding: '6px 12px',
-  borderRadius: 6,
-  border: '1px solid rgba(255,255,255,0.3)',
-  background: active ? 'rgba(255,255,255,0.25)' : 'rgba(0,0,0,0.45)',
-  color: '#fff',
-  font: '700 12px/1 monospace',
-  cursor: 'pointer',
-  backdropFilter: 'blur(6px)',
-});
-
 export default function TilesBackgroundCanvas() {
   const canvasRef = useRef(null);
-  const [active, setActive] = useState(null);
   const teleportRef = useRef(null);
 
   useEffect(() => {
@@ -101,14 +79,14 @@ export default function TilesBackgroundCanvas() {
     tiles.setResolutionFromRenderer(camera, renderer);
     scene.add(tiles.group);
 
-    // position camera above Tokyo. flightState is module-shared (see flight-store.js)
-    // so the Minimap can read lat/lon/heading without prop drilling.
+    // flightState is module-shared (see flight-store.js) so the minimap and
+    // search widget can share a single location without prop drilling.
     const ALT_MIN = 500, ALT_MAX = 3500;
-    teleportRef.current = flightState;
     const FLIGHT_SPEED = 0.00004;
     const TURN_SPEED = 0.8;
 
     const onKeyDown = (e) => {
+      if (shouldSuppressGlobalShortcuts(e)) return;
       if (e.code === 'Space') flightState.boost = true;
       if (e.code === 'ArrowLeft') flightState.left = true;
       if (e.code === 'ArrowRight') flightState.right = true;
@@ -116,6 +94,7 @@ export default function TilesBackgroundCanvas() {
       if (e.code === 'ArrowDown') flightState.down = true;
     };
     const onKeyUp = (e) => {
+      if (shouldSuppressGlobalShortcuts(e)) return;
       if (e.code === 'Space') flightState.boost = false;
       if (e.code === 'ArrowLeft') flightState.left = false;
       if (e.code === 'ArrowRight') flightState.right = false;
@@ -133,6 +112,23 @@ export default function TilesBackgroundCanvas() {
       );
       camera.matrix.decompose(camera.position, camera.quaternion, camera.scale);
     };
+
+    const teleportTo = ({ lat, lon }) => {
+      flightState.lat = lat * DEG2RAD;
+      flightState.lon = lon * DEG2RAD;
+      flightState.heading = -90 * DEG2RAD;
+      flightState.alt = Math.max(ALT_MIN, flightState.alt);
+      requestFlightTeleport({
+        lat: flightState.lat,
+        lon: flightState.lon,
+        alt: flightState.alt,
+        heading: flightState.heading,
+      });
+      updateCamera();
+      updateSunDirection();
+    };
+
+    teleportRef.current = teleportTo;
     updateCamera();
 
     // GUI
@@ -306,25 +302,12 @@ export default function TilesBackgroundCanvas() {
     };
   }, []);
 
-  const handleAirport = (airport, idx) => {
-    setActive(idx);
-    if (teleportRef.current) {
-      teleportRef.current.lat = airport.lat * DEG2RAD;
-      teleportRef.current.lon = airport.lon * DEG2RAD;
-      teleportRef.current.heading = -90 * DEG2RAD;
-    }
-  };
-
   return (
     <>
       <canvas ref={canvasRef} style={{ position: 'fixed', inset: 0, width: '100%', height: '100%', zIndex: 0 }} />
-      <nav style={NAV_STYLE}>
-        {AIRPORTS.map((a, i) => (
-          <button key={a.label} style={BTN_STYLE(active === i)} onClick={() => handleAirport(a, i)}>
-            {a.label} · {a.name}
-          </button>
-        ))}
-      </nav>
+      <CitySearch onSelectCity={(city) => {
+        teleportRef.current?.(city);
+      }} />
     </>
   );
 }
