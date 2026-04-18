@@ -1,4 +1,4 @@
-import React, { Suspense, useEffect, useMemo, useRef, useState } from 'react';
+import React, { Suspense, useEffect, useRef, useState } from 'react';
 import { useFrame, useThree } from '@react-three/fiber';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
@@ -20,7 +20,6 @@ import { cachedFetch, hasCachedModel } from './monolith/model-cache.js';
 
 import {
   LIGHTING_MODE_SCENE,
-  LIGHTING_MODE_PARTICLES,
   LIGHTING_MODE_LABELS,
   ANIMATION_SPEED_BOOST_MULTIPLIER,
   TOUCH_LONG_PRESS_DELAY_MS,
@@ -66,10 +65,9 @@ import {
   randomizeCloudSprite,
 } from './monolith/environment.js';
 
-import { createContrails } from './monolith/contrails.js';
 import { createHeatShimmerGroup } from './monolith/heat-shimmer.js';
 import CesiumTilesBackground from './monolith/CesiumTilesBackground.jsx';
-import { flightState } from './flight-store.js';
+import { autopilot, flightState } from './flight-store.js';
 import { shouldSuppressGlobalShortcuts } from './keyboard-shortcuts.js';
 import {
   cartographicToScenePosition,
@@ -83,10 +81,20 @@ import { createMonolithEffectSnapshot, canTriggerMonolithGlitch } from './monoli
 const teleportScenePositionScratch = new THREE.Vector3();
 const teleportAnchorOffsetScratch = new THREE.Vector3();
 const teleportRotationScratch = new THREE.Matrix4();
+const monolithWorldAnchorScratch = new THREE.Vector3();
+const framePlanePositionScratch = new THREE.Vector3();
+const FRAME_Y_AXIS = new THREE.Vector3(0, 1, 0);
+
+function getShortestAngleDelta(target, current) {
+  return THREE.MathUtils.euclideanModulo(
+    target - current + Math.PI,
+    Math.PI * 2,
+  ) - Math.PI;
+}
 
 // ── Shared effects ─────────────────────────────────────────────────────────────
 
-import { Canvas } from '@react-three/fiber';
+import SafeCanvas from './shared/webgl/SafeCanvas.tsx';
 import {
   SharedEffectStack,
   createSharedEffectHotkeyListener,
@@ -133,13 +141,6 @@ function MonolithScene() {
     density: 0,
     ambientFactor: 1,
   });
-  const contrailsRef = useRef(null);
-  const contrailStateRef = useRef({
-    leftSpawnTimer: 0,
-    rightSpawnTimer: 0,
-    particleIndex: 0,
-    lastWorldYaw: 0,
-  });
   const appliedTeleportVersionRef = useRef(flightCommandState.teleportVersion);
   const terrainTilesRef = useRef([]);
   const flightControlRef = useRef(createInitialFlightControl());
@@ -152,6 +153,8 @@ function MonolithScene() {
   const [effectSnapshot, setEffectSnapshot] = useState(() => (
     createMonolithEffectSnapshot(guiParamsRef.current, stateRef.current, glitchTriggerTokenRef.current)
   ));
+  const foregroundEffectsPausedRef = useRef(false);
+  const [foregroundEffectsPaused, setForegroundEffectsPaused] = useState(false);
 
   // ── Derived helpers ───────────────────────────────────────────────────────
 
@@ -356,8 +359,8 @@ function MonolithScene() {
     monolithRef.current.updateMatrixWorld(true);
     const geoAnchor = monolithRef.current.userData.monolithGeoAnchor;
     const worldAnchor = geoAnchor instanceof THREE.Vector3
-      ? geoAnchor.clone()
-      : monolithRef.current.position.clone();
+      ? monolithWorldAnchorScratch.copy(geoAnchor)
+      : monolithWorldAnchorScratch.copy(monolithRef.current.position);
     monolithRef.current.localToWorld(worldAnchor);
 
     const cartographic = scenePositionToCartographic(worldAnchor);
@@ -638,10 +641,6 @@ function MonolithScene() {
 
   const switchLightingMode = (mode) => {
     stateRef.current.lightingMode = mode;
-    if (lightingRigRef.current) {
-      lightingRigRef.current.particles.visible = mode === LIGHTING_MODE_PARTICLES;
-      if (mode !== LIGHTING_MODE_PARTICLES) lightingRigRef.current.clearParticleGlow();
-    }
     guiParamsRef.current.lightingMode = getLightingModeLabel(mode);
     applySceneAppearance();
     markDisplayedModelMaterialsDirty();
@@ -737,7 +736,6 @@ function MonolithScene() {
     camera.position.set(0, 5.0, 14);
     camera.updateProjectionMatrix();
 
-    gl.setPixelRatio(window.devicePixelRatio);
     gl.toneMapping = THREE.ACESFilmicToneMapping;
     gl.toneMappingExposure = guiParamsRef.current.exposure;
     gl.domElement.style.position = 'relative';
@@ -922,10 +920,6 @@ function MonolithScene() {
       cloudFieldRef.current = cloudField;
     }
 
-    const contrails = createContrails();
-    contrailsRef.current = contrails;
-    contrailStateRef.current.lastWorldYaw = flightControlRef.current.worldYaw;
-    scene.add(contrails.group);
 
     if (OCEAN_ENABLED) {
       const ocean = createOcean();
@@ -960,7 +954,6 @@ function MonolithScene() {
       getCurrentModelIndex: () => stateRef.current.currentModelIndex,
       getMonolith: () => monolithRef.current,
       guiParams: guiParamsRef.current,
-      getIsBoosting: () => stateRef.current.animationSpeedBoostEnabled && supportsAnimationSpeedBoost(),
       getCloudAmbientFactor: () => cloudStateRef.current.ambientFactor,
     });
 
@@ -1186,6 +1179,21 @@ function MonolithScene() {
     const elapsed = clockRef.current.getElapsedTime();
     const boostVisualState = boostVisualStateRef.current;
     const boostShakeOffset = boostVisualState.lastShakeOffset;
+    const shouldPauseForegroundEffects = autopilot.active || flightState.boost;
+
+    if (foregroundEffectsPausedRef.current !== shouldPauseForegroundEffects) {
+      foregroundEffectsPausedRef.current = shouldPauseForegroundEffects;
+      setForegroundEffectsPaused(shouldPauseForegroundEffects);
+    }
+
+    // Sync autopilot boost → visual effect stack so minimap click-to-fly
+    // triggers the same spacebar effects (FOV, shake, shimmer).
+    if (flightState.boost && !stateRef.current.animationSpeedBoostEnabled) {
+      setAnimationSpeedBoost(true);
+    } else if (!flightState.boost && stateRef.current.animationSpeedBoostEnabled) {
+      setAnimationSpeedBoost(false);
+    }
+
     const currentModel = getCurrentModelDef();
     const sr71BoostMotionScale = (
       supportsAnimationSpeedBoost()
@@ -1209,13 +1217,15 @@ function MonolithScene() {
     // ── Camera follow ───────────────────────────────────────────────────
     const planeGeoAnchor = monolithRef.current?.userData.monolithGeoAnchor;
     const planePos = planeGeoAnchor instanceof THREE.Vector3
-      ? planeGeoAnchor.clone()
-      : (monolithRef.current?.position ?? new THREE.Vector3());
+      ? framePlanePositionScratch.copy(planeGeoAnchor)
+      : monolithRef.current
+        ? framePlanePositionScratch.copy(monolithRef.current.position)
+        : framePlanePositionScratch.set(0, 0, 0);
     if (monolithRef.current) {
       monolithRef.current.localToWorld(planePos);
     }
-    const camRadius = 14;
-    const camBaseY = 5.0;
+    const camRadius = 22;
+    const camBaseY = 7.0;
     const targetCamX = planePos.x;
     const targetCamZ = planePos.z + camRadius;
     const targetCamY = planePos.y + camBaseY;
@@ -1232,9 +1242,6 @@ function MonolithScene() {
     controlsRef.current?.update();
     mixerRef.current?.update(delta);
     materialManagerRef.current?.updateXrayAnimation(elapsed);
-    lightingRigRef.current?.updateBackgroundStars({
-      cameraPosition: camera.position,
-    });
 
     // ── Boost visual intensity ──────────────────────────────────────────
     boostVisualState.intensity = THREE.MathUtils.lerp(
@@ -1265,7 +1272,21 @@ function MonolithScene() {
     );
 
     // Background rotation uses turnDirection; currently left must increase yaw to move background right.
-    const turnDirection = Number(flightControl.turnLeftPressed) - Number(flightControl.turnRightPressed);
+    const manualTurnDirection = Number(flightControl.turnLeftPressed) - Number(flightControl.turnRightPressed);
+    const autopilotTargetWorldYaw = -Math.PI / 2 - flightState.heading;
+    const autopilotWorldYawDelta = getShortestAngleDelta(
+      autopilotTargetWorldYaw,
+      flightControl.worldYaw,
+    );
+    const autopilotTurnDirection = (
+      autopilot.active
+      && manualTurnDirection === 0
+      && Math.abs(autopilotWorldYawDelta) > 0.0001
+      && delta > 0
+    )
+      ? THREE.MathUtils.clamp(autopilotWorldYawDelta / (1.4 * delta), -1, 1)
+      : 0;
+    const turnDirection = manualTurnDirection || autopilotTurnDirection;
 
     // worldYaw accumulates freely — drives sky/ocean so sun can be placed anywhere
     flightControl.worldYaw += turnDirection * 1.4 * delta;
@@ -1331,10 +1352,9 @@ function MonolithScene() {
         sr71BoostMotionScale ?? (1 + boostVisualState.intensity * 1.8)
       );
       const deltaYaw = flightControl.worldYaw - flightControl.lastWorldYaw;
-      const yAxis = new THREE.Vector3(0, 1, 0);
 
       cloudFieldRef.current.children.forEach((cloud) => {
-        cloud.position.applyAxisAngle(yAxis, -deltaYaw);
+        cloud.position.applyAxisAngle(FRAME_Y_AXIS, -deltaYaw);
         cloud.position.z += cloudSpeed * cloud.userData.scrollSpeed * delta;
         if (cloud.position.z > 22) {
           randomizeCloudSprite(
@@ -1366,75 +1386,6 @@ function MonolithScene() {
       cloudStateRef.current.ambientFactor = THREE.MathUtils.lerp(cloudStateRef.current.ambientFactor, 1, delta * 2.2);
     }
 
-    // ── Contrails ───────────────────────────────────────────────────────
-    if (contrailsRef.current) {
-      const contrailSpeed = CLOUD_SCROLL_SPEED * 1.5 * (
-        sr71BoostMotionScale ?? (1 + boostVisualState.intensity * 2.5)
-      );
-      const deltaYaw = flightControl.worldYaw - flightControl.lastWorldYaw;
-      const yAxis = new THREE.Vector3(0, 1, 0);
-
-      contrailsRef.current.particles.forEach((p) => {
-        if (p.life > 0) {
-          p.life -= delta;
-          if (p.life <= 0) {
-            p.sprite.visible = false;
-          } else {
-            p.sprite.position.applyAxisAngle(yAxis, -deltaYaw);
-            p.sprite.position.z += contrailSpeed * delta;
-            
-            const lifeProgress = p.life / p.maxLife;
-            p.sprite.scale.setScalar(0.8 + (1 - lifeProgress) * 4.5);
-            p.sprite.material.opacity = Math.pow(lifeProgress, 1.2) * 0.45;
-          }
-        }
-      });
-
-      if (boostVisualState.intensity > 0.01) {
-        contrailStateRef.current.leftSpawnTimer -= delta;
-        contrailStateRef.current.rightSpawnTimer -= delta;
-
-        const spawnParticle = (offsetZ) => {
-          const index = contrailStateRef.current.particleIndex;
-          const p = contrailsRef.current.particles[index];
-          p.life = p.maxLife = 1.0 + Math.random() * 0.6;
-          p.sprite.visible = true;
-
-          if (monolithRef.current) {
-            // Compute true wingtips based on model's physical bounding box
-            if (!monolithRef.current.userData.contrailOffsets) {
-              const box = new THREE.Box3().setFromObject(monolithRef.current);
-              // In world space (due to -90 base Y rot), X is wingspan, Z is length.
-              const wingspan = box.max.x - box.min.x;
-              const length = box.max.z - box.min.z;
-              monolithRef.current.userData.contrailOffsets = {
-                halfSpan: wingspan * 0.45, // 90% of half-span to be right at the tips
-                sweepBack: length * 0.25, // trailing edge estimation
-              };
-            }
-            const offsets = monolithRef.current.userData.contrailOffsets;
-            const sign = offsetZ > 0 ? 1 : -1;
-            // Native local X maps to world +Z (tail), Native Z is wing axis.
-            const wingPos = new THREE.Vector3(offsets.sweepBack, -0.1, offsets.halfSpan * sign); 
-            
-            monolithRef.current.localToWorld(wingPos);
-            p.sprite.position.copy(wingPos);
-          }
-          
-          contrailStateRef.current.particleIndex = (index + 1) % 200;
-        };
-
-        const spawnRate = 0.016;
-        while (contrailStateRef.current.leftSpawnTimer <= 0) {
-          spawnParticle(3.8);
-          contrailStateRef.current.leftSpawnTimer += spawnRate;
-        }
-        while (contrailStateRef.current.rightSpawnTimer <= 0) {
-          spawnParticle(-3.8);
-          contrailStateRef.current.rightSpawnTimer += spawnRate;
-        }
-      }
-    }
 
     // ── Terrain scrolling ───────────────────────────────────────────────
     if (TERRAIN_ENABLED && terrainTilesRef.current.length > 0) {
@@ -1453,11 +1404,10 @@ function MonolithScene() {
         );
       });
 
-      const yAxis = new THREE.Vector3(0, 1, 0);
       const deltaYaw = flightControl.worldYaw - flightControl.lastWorldYaw;
       
       terrainTilesRef.current.forEach((tile) => {
-        tile.position.applyAxisAngle(yAxis, -deltaYaw);
+        tile.position.applyAxisAngle(FRAME_Y_AXIS, -deltaYaw);
         tile.position.z += scrollSpeed * delta;
         if (tile.position.z > wrapThreshold) {
           const nextRenderZOffset = furthestBackZ - TERRAIN_TILE_LENGTH;
@@ -1517,8 +1467,6 @@ function MonolithScene() {
       lightingRigRef.current?.updateSceneLighting({
         forceRefresh: effectSnapshot.cinematicEnabled && effectSnapshot.bloomEnabled,
       });
-    } else if (stateRef.current.lightingMode === LIGHTING_MODE_PARTICLES) {
-      lightingRigRef.current?.updateParticleLighting();
     }
 
     if (effectSnapshot.cinematicEnabled && effectSnapshot.bloomEnabled) {
@@ -1529,23 +1477,28 @@ function MonolithScene() {
     flightControl.lastWorldYaw = flightControl.worldYaw;
   });
 
-  return <SharedEffectStack {...effectSnapshot} />;
+  return (
+    <SharedEffectStack
+      {...effectSnapshot}
+      paused={foregroundEffectsPaused}
+    />
+  );
 }
 
 // ── MonolithCanvas wrapper ──────────────────────────────────────────────────────
 
 export default function MonolithCanvas() {
-  const dpr = useMemo(() => Math.min(window.devicePixelRatio, 2), []);
-
   return (
-    <Canvas
-      dpr={dpr}
-      gl={{ antialias: true, alpha: true }}
+    <SafeCanvas
+      dpr={[0.75, 1.5]}
+      rendererOptions={{ antialias: false, alpha: true }}
+      sceneLabel="Monolith"
+      showFrameRateOverlay
       style={{ position: 'fixed', inset: 0, zIndex: 1 }}
     >
       <Suspense fallback={null}>
         <MonolithScene />
       </Suspense>
-    </Canvas>
+    </SafeCanvas>
   );
 }

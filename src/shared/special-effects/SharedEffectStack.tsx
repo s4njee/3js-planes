@@ -55,6 +55,7 @@ export interface SharedEffectStackProps {
   hueCycleStartTime?: number;
   hueSatEnabled?: boolean;
   pixelMosaicEnabled?: boolean;
+  paused?: boolean;
   saturation?: number;
   scanlineDensity?: number;
   scanlineEnabled?: boolean;
@@ -94,6 +95,7 @@ export default function SharedEffectStack({
   hueCycleStartTime = 0,
   hueSatEnabled = false,
   pixelMosaicEnabled = false,
+  paused = false,
   saturation = 0,
   scanlineDensity = 4,
   scanlineEnabled = true,
@@ -104,7 +106,7 @@ export default function SharedEffectStack({
   volumetricCloudsEnabled = false,
 }: SharedEffectStackProps) {
   const { qualityTier } = useFrameRate();
-  const composerEnabled = qualityTier === 'high' || volumetricCloudsEnabled;
+  const composerEnabled = !paused && (qualityTier === 'high' || volumetricCloudsEnabled);
   const effectiveBloomEnabled = bloomEnabled;
   const effectiveScanlineEnabled = scanlineEnabled;
   const effectiveChromaticEnabled = chromaticAberrationEnabled;

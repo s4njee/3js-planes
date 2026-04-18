@@ -8,10 +8,8 @@ import * as THREE from 'three';
 // ── Lighting modes ─────────────────────────────────────────────────────────────
 
 export const LIGHTING_MODE_SCENE = 0;
-export const LIGHTING_MODE_PARTICLES = 1;
 export const LIGHTING_MODE_LABELS = [
   'A (Scene)',
-  'B (Particles)',
 ];
 
 // ── Post-processing ────────────────────────────────────────────────────────────

@@ -7,6 +7,7 @@ import {
   FrameRateMonitorProvider,
   type FrameRateMonitorConfig,
   useFrameRate,
+  useFrameRateDispatch,
 } from '../performance/index.ts';
 
 const R3F_DEFAULT_RENDERER_OPTIONS: WebGLRendererParameters = {
@@ -190,7 +191,7 @@ function normalizeDprProp(dpr: CanvasProps['dpr']) {
 function buildAdaptiveDprSteps(dpr: CanvasProps['dpr']) {
   const { minDpr, maxDpr, initialDpr } = normalizeDprProp(dpr);
   const mediumDpr = clampDpr(1.5, minDpr, maxDpr);
-  const lowDpr = clampDpr(DEFAULT_DEVICE_PIXEL_RATIO, minDpr, maxDpr);
+  const lowDpr = minDpr;
   const steps = [initialDpr, mediumDpr, lowDpr].filter((value, index, values) => (
     values.findIndex((candidate) => Math.abs(candidate - value) < DPR_EPSILON) === index
   ));
@@ -267,6 +268,7 @@ function AdaptiveDprBridge({
 }) {
   const { gl } = useThree();
   const { fps, sampleCount, thresholds } = useFrameRate();
+  const setSnapshot = useFrameRateDispatch();
   const transitionDirectionRef = useRef<'up' | 'down' | null>(null);
   const transitionStartTimeRef = useRef(0);
   const currentStepIndex = useMemo(() => {
@@ -278,6 +280,17 @@ function AdaptiveDprBridge({
   useEffect(() => {
     gl.setPixelRatio(currentDpr);
   }, [currentDpr, gl]);
+
+  useEffect(() => {
+    setSnapshot?.((currentSnapshot) => (
+      Math.abs((currentSnapshot.dpr ?? 0) - currentDpr) < DPR_EPSILON
+        ? currentSnapshot
+        : {
+            ...currentSnapshot,
+            dpr: currentDpr,
+          }
+    ));
+  }, [currentDpr, setSnapshot]);
 
   useEffect(() => {
     if (sampleCount === 0 || dprSteps.length <= 1) {

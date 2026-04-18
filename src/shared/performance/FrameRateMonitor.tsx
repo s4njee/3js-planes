@@ -5,10 +5,16 @@ import {
   type ReactNode,
   type SetStateAction,
   useContext,
+  useEffect,
   useMemo,
   useRef,
   useState,
 } from 'react';
+import {
+  getBackgroundPerformanceSnapshot,
+  subscribeBackgroundPerformance,
+  type BackgroundPerformanceSnapshot,
+} from './backgroundPerformance.ts';
 
 export type FrameRateQualityTier = 'high' | 'low';
 
@@ -25,6 +31,7 @@ export interface FrameRateMonitorConfig {
 }
 
 export interface FrameRateSnapshot {
+  dpr?: number;
   fps: number;
   frameCount: number;
   qualityTier: FrameRateQualityTier;
@@ -47,6 +54,7 @@ export const DEFAULT_FRAME_RATE_MONITOR_CONFIG: FrameRateMonitorConfig = Object.
 });
 
 const DEFAULT_FRAME_RATE_SNAPSHOT: FrameRateSnapshot = Object.freeze({
+  dpr: undefined,
   fps: 0,
   frameCount: 0,
   qualityTier: 'high',
@@ -199,7 +207,10 @@ export function FrameRateMonitorBridge() {
         return currentSnapshot;
       }
 
-      return nextSnapshot;
+      return {
+        ...nextSnapshot,
+        dpr: currentSnapshot.dpr,
+      };
     });
   });
 
@@ -211,7 +222,10 @@ export function FrameRateHud({
 }: {
   label?: string;
 }) {
-  const { fps, qualityTier, sampleCount } = useFrameRate();
+  const { dpr, fps, qualityTier, sampleCount } = useFrameRate();
+  const [backgroundPerformance, setBackgroundPerformance] = useState<BackgroundPerformanceSnapshot>(
+    () => getBackgroundPerformanceSnapshot(),
+  );
   const badgeStyle = useMemo(() => ({
     ...FRAME_RATE_BADGE_STYLE,
     background: qualityTier === 'high'
@@ -222,6 +236,8 @@ export function FrameRateHud({
       : '#ff9d9d',
   }), [qualityTier]);
 
+  useEffect(() => subscribeBackgroundPerformance(setBackgroundPerformance), []);
+
   return (
     <div style={FRAME_RATE_HUD_STYLE} aria-live="polite">
       <span style={badgeStyle}>{qualityTier}</span>
@@ -230,6 +246,24 @@ export function FrameRateHud({
         {' '}
         {sampleCount > 0 ? Math.round(fps) : '--'}
       </span>
+      {dpr !== undefined ? (
+        <span>
+          DPR
+          {' '}
+          {dpr.toFixed(2)}
+        </span>
+      ) : null}
+      {backgroundPerformance.dpr !== undefined ? (
+        <span>
+          BG
+          {' '}
+          {backgroundPerformance.quality}
+          {' '}
+          DPR
+          {' '}
+          {backgroundPerformance.dpr.toFixed(2)}
+        </span>
+      ) : null}
     </div>
   );
 }
@@ -240,6 +274,10 @@ export function useFrameRate() {
 
 export function useFrameRateConfig() {
   return useContext(FrameRateConfigContext);
+}
+
+export function useFrameRateDispatch() {
+  return useContext(FrameRateDispatchContext);
 }
 
 export { DEFAULT_FRAME_RATE_THRESHOLDS, getFrameRateQualityTier };

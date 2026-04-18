@@ -52,7 +52,17 @@ export default function CesiumTilesBackground() {
       camera.fov, camera.aspect, 1, 1e7,
     );
     tiles.setCamera(ecefCamera);
-    tiles.setResolutionFromRenderer(ecefCamera, gl);
+
+    const resolutionSize = new THREE.Vector2();
+    const syncTilesResolution = () => {
+      gl.getDrawingBufferSize(resolutionSize);
+      tiles.setResolutionFromRenderer(ecefCamera, gl);
+      return {
+        height: resolutionSize.y,
+        width: resolutionSize.x,
+      };
+    };
+    const resolution = syncTilesResolution();
 
     const onLoadTileset = () => {
       const { ellipsoid, group } = tiles;
@@ -80,7 +90,14 @@ export default function CesiumTilesBackground() {
     tiles.addEventListener('load-tileset', onLoadTileset);
     scene.add(tiles.group);
 
-    stateRef.current = { tiles, ecefCamera, dracoLoader };
+    stateRef.current = {
+      tiles,
+      ecefCamera,
+      dracoLoader,
+      resolution,
+      resolutionSize,
+      syncTilesResolution,
+    };
 
     return () => {
       tiles.removeEventListener('load-tileset', onLoadTileset);
@@ -96,7 +113,7 @@ export default function CesiumTilesBackground() {
     const state = stateRef.current;
     if (!state) return;
 
-    const { tiles, ecefCamera } = state;
+    const { tiles, ecefCamera, resolution, resolutionSize, syncTilesResolution } = state;
     const { group } = tiles;
 
     // Only update LOD camera once the tileset is loaded and group is transformed
@@ -122,7 +139,16 @@ export default function CesiumTilesBackground() {
       ecefCamera.updateMatrixWorld(true);
     }
 
-    tiles.setResolutionFromRenderer(ecefCamera, gl);
+    gl.getDrawingBufferSize(resolutionSize);
+    if (
+      resolution.width !== resolutionSize.x
+      || resolution.height !== resolutionSize.y
+    ) {
+      const nextResolution = syncTilesResolution();
+      resolution.width = nextResolution.width;
+      resolution.height = nextResolution.height;
+    }
+
     tiles.update();
   });
 

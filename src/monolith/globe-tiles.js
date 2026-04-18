@@ -74,7 +74,16 @@ export function createGlobeTilesLayer({
   tiles.registerPlugin(new TilesFadePlugin());
   tiles.registerPlugin(new UpdateOnChangePlugin());
   tiles.setCamera(camera);
-  tiles.setResolutionFromRenderer(camera, renderer);
+  const resolutionSize = new THREE.Vector2();
+  const syncTilesResolution = (frameCamera = camera, frameRenderer = renderer) => {
+    frameRenderer.getDrawingBufferSize(resolutionSize);
+    tiles.setResolutionFromRenderer(frameCamera, frameRenderer);
+    return {
+      height: resolutionSize.y,
+      width: resolutionSize.x,
+    };
+  };
+  const resolution = syncTilesResolution(camera, renderer);
 
   tiles.addEventListener('load-error', (event) => {
     onError?.(event?.error ?? event);
@@ -109,7 +118,15 @@ export function createGlobeTilesLayer({
       root.updateMatrixWorld(true);
 
       tiles.setCamera(frameCamera);
-      tiles.setResolutionFromRenderer(frameCamera, frameRenderer);
+      frameRenderer.getDrawingBufferSize(resolutionSize);
+      if (
+        resolution.width !== resolutionSize.x
+        || resolution.height !== resolutionSize.y
+      ) {
+        const nextResolution = syncTilesResolution(frameCamera, frameRenderer);
+        resolution.width = nextResolution.width;
+        resolution.height = nextResolution.height;
+      }
       frameCamera.updateMatrixWorld();
       tiles.update();
     },

@@ -67,7 +67,7 @@ export const MODEL_SET_DEF = {
     },
   ],
   defaultModel: 0,
-  defaultLighting: 1, // 1 is B (Particles)
+  defaultLighting: 0,
   lightingStyle: 'pointRing',
   nullBackground: true,
   positionYOffset: 0.8,

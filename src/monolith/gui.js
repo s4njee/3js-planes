@@ -22,8 +22,6 @@ import GUI from 'lil-gui';
 // translated to @react-three/postprocessing equivalents in mapMonolithBloomSettings().
 
 export function createDefaultGuiParams() {
-  const lightingModes = ['A (Scene)', 'B (Particles)'];
-
   return {
     showGUI: false,
     bloomEnabled: true,
@@ -55,7 +53,7 @@ export function createDefaultGuiParams() {
     ambientColor: '#ffffff',
     backgroundColor: '#050709',
     whiteMode: false,
-    lightingMode: lightingModes[1],
+    lightingMode: 'A (Scene)',
     modelRotationX: 0.0,
     modelRotationY: -1.58,
     modelRotationZ: 0.021592653589793,
@@ -77,12 +75,9 @@ export function createGuiControls({
   onEngineShimmerChange,
   onEffectSettingsChange,
   onWhiteModeChange,
-  onLightingModeChange,
   onTriggerGlitch,
   onModelRotationChange,
 }) {
-  const lightingModes = ['A (Scene)', 'B (Particles)'];
-
   const gui = new GUI({ title: '⚙ Settings' });
   gui.domElement.style.zIndex = '200';
   gui.hide();
@@ -157,9 +152,6 @@ export function createGuiControls({
   });
   sceneFolder.add(guiParams, 'whiteMode').name('White Mode').onChange((value) => {
     onWhiteModeChange(value);
-  });
-  sceneFolder.add(guiParams, 'lightingMode', lightingModes).name('Lighting Mode').onChange((value) => {
-    onLightingModeChange(Math.max(lightingModes.indexOf(value), 0));
   });
 
   const transformFolder = gui.addFolder('Model Transform');

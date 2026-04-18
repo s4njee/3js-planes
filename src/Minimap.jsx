@@ -1,7 +1,7 @@
 import { useEffect, useRef } from 'react';
 import maplibregl from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
-import { flightState } from './flight-store.js';
+import { flightState, requestAutopilot } from './flight-store.js';
 
 const RAD2DEG = 180 / Math.PI;
 
@@ -18,6 +18,7 @@ const CONTAINER_STYLE = {
   zIndex: 10,
   pointerEvents: 'auto',
   background: '#111',
+  cursor: 'crosshair',
 };
 
 // Top-down plane silhouette pointing up (north). The fuselage is longer than
@@ -48,35 +49,30 @@ export default function Minimap() {
   useEffect(() => {
     const initLon = flightState.lon * RAD2DEG;
     const initLat = flightState.lat * RAD2DEG;
-    let isUserInteracting = false;
 
     const map = new maplibregl.Map({
       container: containerRef.current,
       style: STYLE,
       center: [initLon, initLat],
-      zoom: 6,
+      zoom: 3,
       attributionControl: { compact: true },
-      interactive: true,
-      dragRotate: false,
-      pitchWithRotate: false,
+      interactive: false,
     });
+
+    // Re-enable scroll zoom while keeping drag/rotate disabled
     map.scrollZoom.enable();
-    map.dragPan.enable();
 
-    const markInteractionStart = () => {
-      isUserInteracting = true;
-    };
-
-    const markInteractionEnd = () => {
-      window.setTimeout(() => {
-        isUserInteracting = false;
-      }, 0);
-    };
-
-    map.on('dragstart', markInteractionStart);
-    map.on('dragend', markInteractionEnd);
-    map.on('zoomstart', markInteractionStart);
-    map.on('zoomend', markInteractionEnd);
+    // Click-to-fly: click anywhere on the minimap to fly there.
+    // Uses the same autopilot path as CitySearch for consistent behaviour.
+    map.getCanvas().addEventListener('click', (e) => {
+      const rect = map.getCanvas().getBoundingClientRect();
+      const point = new maplibregl.Point(
+        e.clientX - rect.left,
+        e.clientY - rect.top,
+      );
+      const { lng, lat } = map.unproject(point);
+      requestAutopilot({ lat, lon: lng });
+    });
 
     const el = document.createElement('div');
     el.innerHTML = PLANE_SVG;
@@ -95,19 +91,13 @@ export default function Minimap() {
       const lat = flightState.lat * RAD2DEG;
       marker.setLngLat([lon, lat]);
       marker.setRotation(flightState.heading * RAD2DEG);
-      if (!isUserInteracting) {
-        map.setCenter([lon, lat]);
-      }
+      map.setCenter([lon, lat]);
       raf = requestAnimationFrame(tick);
     };
     raf = requestAnimationFrame(tick);
 
     return () => {
       cancelAnimationFrame(raf);
-      map.off('dragstart', markInteractionStart);
-      map.off('dragend', markInteractionEnd);
-      map.off('zoomstart', markInteractionStart);
-      map.off('zoomend', markInteractionEnd);
       map.remove();
     };
   }, []);

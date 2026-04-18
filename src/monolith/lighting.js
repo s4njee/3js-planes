@@ -1,132 +1,22 @@
 import * as THREE from 'three';
-import { resolveAssetUrl } from './asset-url.js';
 
 // ── Lighting rig ──────────────────────────────────────────────────────────────
 // Creates and animates all Three.js lights used by MonolithScene.
-// Two lighting modes are supported:
-//   Mode A (Scene)     — a static backdrop of directional/spot/street lights,
-//                        style selected by the active model collection definition.
-//   Mode B (Particles) — 5000 falling particles with 6 proximity point lights
-//                        that respond to how close particles are to the model.
+// The rig provides a static/animated scene-lighting style selected by the
+// active model collection definition.
 //
 // The returned object exposes only the methods MonolithScene needs;
 // all internal light instances and buffers are fully encapsulated.
 
-export function createLightingRig({ scene, currentSetDef, getCurrentModelIndex, getMonolith, guiParams, getIsBoosting, getCloudAmbientFactor }) {
+export function createLightingRig({ scene, currentSetDef, getCurrentModelIndex, getMonolith, guiParams, getCloudAmbientFactor }) {
   // ── Animation constants ─────────────────────────────────────────────────────
   const RING_TOP = 8;        // World-space Y where a moving ring light starts
   const RING_BOTTOM = -3;    // World-space Y where it exits the frame
   const RING_RANGE = RING_TOP - RING_BOTTOM;
   const RING_SPEED = 0.0004; // Normalised units per ms
 
-  // ── Particle system (Lighting mode B) ──────────────────────────────────────
-  // 5000 falling point-sprites that drift downward and wrap at y=-1.
-  // Their positions drive proximity glow lights toward the active model.
   const ambient = new THREE.AmbientLight(0xffffff, 0);
   scene.add(ambient);
-
-  const PARTICLE_RANGE_X = 140;
-  const PARTICLE_RANGE_Z = 200;
-  const PARTICLE_TOP_Y = 32;
-  const PARTICLE_BOTTOM_Y = -5;
-
-  const particleCount = 5000;
-  const particleGeo = new THREE.BufferGeometry();
-  const particlePositions = new Float32Array(particleCount * 3);
-  const velocities = new Float32Array(particleCount);
-  for (let i = 0; i < particleCount; i++) {
-    particlePositions[i * 3] = (Math.random() - 0.5) * PARTICLE_RANGE_X;
-    particlePositions[i * 3 + 1] = PARTICLE_BOTTOM_Y + Math.random() * (PARTICLE_TOP_Y - PARTICLE_BOTTOM_Y);
-    particlePositions[i * 3 + 2] = (Math.random() - 0.5) * PARTICLE_RANGE_Z;
-    velocities[i] = 0.01 + Math.random() * 0.03;
-  }
-  const particleColors = new Float32Array(particleCount * 3);
-  particleGeo.setAttribute('position', new THREE.BufferAttribute(particlePositions, 3));
-  particleGeo.setAttribute('color', new THREE.BufferAttribute(particleColors, 3));
-
-  const particleTexture = new THREE.TextureLoader().load(resolveAssetUrl('/textures/star_02.png'));
-  const particleMat = new THREE.PointsMaterial({
-    size: 0.18,
-    sizeAttenuation: true,
-    map: particleTexture,
-    transparent: true,
-    depthWrite: false,
-    blending: THREE.NormalBlending,
-    vertexColors: true,
-  });
-  const particles = new THREE.Points(particleGeo, particleMat);
-  particles.visible = false;
-  scene.add(particles);
-
-  const backgroundStarConfigs = [
-    { count: 360, radiusMin: 44, radiusMax: 58, size: 0.7, opacity: 0.95 },
-    { count: 840, radiusMin: 60, radiusMax: 76, size: 0.48, opacity: 0.84 },
-    { count: 1800, radiusMin: 80, radiusMax: 96, size: 0.32, opacity: 0.74 },
-  ];
-  const backgroundStarColor = new THREE.Color();
-  const backgroundStars = new THREE.Group();
-  const backgroundStarGeometries = [];
-  const backgroundStarMaterials = [];
-
-  backgroundStarConfigs.forEach((config, layerIndex) => {
-    const backgroundStarGeo = new THREE.BufferGeometry();
-    const backgroundStarPositions = new Float32Array(config.count * 3);
-    const backgroundStarColors = new Float32Array(config.count * 3);
-
-    for (let i = 0; i < config.count; i++) {
-      const theta = Math.random() * Math.PI * 2;
-      const phi = Math.acos(THREE.MathUtils.lerp(0.05, 1.0, Math.random()));
-      const radius = THREE.MathUtils.lerp(config.radiusMin, config.radiusMax, Math.random());
-      const sinPhi = Math.sin(phi);
-
-      backgroundStarPositions[i * 3] = Math.cos(theta) * sinPhi * radius;
-      backgroundStarPositions[i * 3 + 1] = Math.cos(phi) * radius;
-      backgroundStarPositions[i * 3 + 2] = Math.sin(theta) * sinPhi * radius;
-
-      const lightness = THREE.MathUtils.lerp(0.78, 1.0, Math.random());
-      const hue = THREE.MathUtils.lerp(0.55, 0.66, Math.random());
-      const saturation = THREE.MathUtils.lerp(0.05, 0.18, Math.random());
-      backgroundStarColor.setHSL(hue, saturation, lightness);
-      backgroundStarColors[i * 3] = backgroundStarColor.r;
-      backgroundStarColors[i * 3 + 1] = backgroundStarColor.g;
-      backgroundStarColors[i * 3 + 2] = backgroundStarColor.b;
-    }
-
-    backgroundStarGeo.setAttribute('position', new THREE.BufferAttribute(backgroundStarPositions, 3));
-    backgroundStarGeo.setAttribute('color', new THREE.BufferAttribute(backgroundStarColors, 3));
-
-    const backgroundStarsMat = new THREE.PointsMaterial({
-      size: config.size,
-      sizeAttenuation: true,
-      map: particleTexture,
-      transparent: true,
-      opacity: config.opacity,
-      alphaTest: 0.01,
-      depthWrite: false,
-      blending: THREE.NormalBlending,
-      vertexColors: true,
-    });
-
-    const backgroundStarLayer = new THREE.Points(backgroundStarGeo, backgroundStarsMat);
-    backgroundStarLayer.frustumCulled = false;
-    backgroundStarLayer.renderOrder = -50 + layerIndex;
-    backgroundStars.add(backgroundStarLayer);
-    backgroundStarGeometries.push(backgroundStarGeo);
-    backgroundStarMaterials.push(backgroundStarsMat);
-  });
-
-  backgroundStars.frustumCulled = false;
-  scene.add(backgroundStars);
-
-  const glowLights = [];
-  const glowCount = 6;
-  const GLOW_RADIUS = 25;
-  for (let i = 0; i < glowCount; i++) {
-    const light = new THREE.PointLight(0xffffff, 0, 8);
-    light.position.set(0, -10, 0);
-    scene.add(light);
-    glowLights.push(light);
-  }
 
   // ── Scene lights (Lighting mode A) ─────────────────────────────────────────
   const ringGeometry = new THREE.TorusGeometry(3, 0.05, 8, 64);
@@ -175,8 +65,6 @@ export function createLightingRig({ scene, currentSetDef, getCurrentModelIndex, 
   scene.add(heroSpotLight);
   scene.add(heroSpotLight.target);
 
-  let lightFrame = 0;
-  const tempColor = new THREE.Color();
   let lastStaticSceneSignature = null;
 
   function resetAllLights() {
@@ -194,12 +82,6 @@ export function createLightingRig({ scene, currentSetDef, getCurrentModelIndex, 
     warmLight.visible = false;
     coolLight.visible = false;
     heroSpotLight.visible = false;
-  }
-
-  function clearParticleGlow() {
-    glowLights.forEach((light) => {
-      light.intensity = 0;
-    });
   }
 
   function getLightingStyle() {
@@ -296,105 +178,6 @@ export function createLightingRig({ scene, currentSetDef, getCurrentModelIndex, 
     streetLight2.position.set(xOffset, height, z2);
     streetLight1.intensity = intensityScale * falloff1;
     streetLight2.intensity = intensityScale * falloff2;
-  }
-
-  function animateParticlePositions({ nowMs }) {
-    const positions = particles.geometry.attributes.position.array;
-    const isBoosting = getIsBoosting ? getIsBoosting() : false;
-
-    for (let i = 0; i < particleCount; i++) {
-        if (isBoosting) {
-          positions[i * 3 + 2] += velocities[i] * 50.0; // Fast wind along Z axis
-          if (positions[i * 3 + 2] > 25) { 
-            positions[i * 3 + 2] = -80;
-            positions[i * 3 + 1] = PARTICLE_BOTTOM_Y + Math.random() * (PARTICLE_TOP_Y - PARTICLE_BOTTOM_Y);
-            positions[i * 3] = (Math.random() - 0.5) * PARTICLE_RANGE_X;
-          }
-        } else {
-          positions[i * 3 + 1] -= velocities[i];
-          positions[i * 3] += Math.sin(nowMs * 0.001 + i) * 0.002;
-          if (positions[i * 3 + 1] < PARTICLE_BOTTOM_Y) {
-            positions[i * 3 + 1] = PARTICLE_TOP_Y;
-            positions[i * 3] = (Math.random() - 0.5) * PARTICLE_RANGE_X;
-            positions[i * 3 + 2] = (Math.random() - 0.5) * PARTICLE_RANGE_Z;
-          }
-      }
-    }
-    particles.geometry.attributes.position.needsUpdate = true;
-    return positions;
-  }
-
-  function getParticleBaseHue({ hueType, time }) {
-    if (hueType === 'warm') {
-      return 0.04 + Math.sin(time) * 0.02 + Math.sin(time * 2.3) * 0.01 + Math.sin(time * 5.7) * 0.01;
-    }
-    if (hueType === 'rainbow') {
-      return (time * 0.1) % 1.0;
-    }
-    return 0;
-  }
-
-  function updateParticleColors({ time, hueType }) {
-    const colors = particles.geometry.attributes.color.array;
-    let baseHue = getParticleBaseHue({ hueType, time });
-
-    for (let i = 0; i < particleCount; i++) {
-      const flicker = 0.3 + 0.7 * (0.5 + 0.5 * Math.sin(time * 3 + i * 7.13));
-      if (hueType === 'warm') {
-        tempColor.setHSL(baseHue + Math.sin(i * 3.77 + time) * 0.03, 1.0, 0.35 + flicker * 0.4);
-      } else if (hueType === 'rainbow') {
-        tempColor.setHSL((baseHue + i / particleCount + Math.sin(i * 0.5 + time) * 0.1) % 1.0, 1.0, 0.35 + flicker * 0.4);
-      } else {
-        tempColor.setHSL(0, 0, 0.6 + flicker * 0.35);
-      }
-      colors[i * 3] = tempColor.r;
-      colors[i * 3 + 1] = tempColor.g;
-      colors[i * 3 + 2] = tempColor.b;
-    }
-
-    particles.geometry.attributes.color.needsUpdate = true;
-    return baseHue;
-  }
-
-  function collectNearestParticlesToMonolith(positions, monolithPosition) {
-    const nearest = [];
-
-    for (let i = 0; i < particleCount; i++) {
-      const x = positions[i * 3];
-      const y = positions[i * 3 + 1];
-      const z = positions[i * 3 + 2];
-      const dx = x - monolithPosition.x;
-      const dy = y - monolithPosition.y;
-      const dz = z - monolithPosition.z;
-      const distSq = dx * dx + dy * dy + dz * dz;
-
-      if (distSq < GLOW_RADIUS * GLOW_RADIUS) {
-        nearest.push({ x, y, z, distSq });
-        if (nearest.length > glowCount * 3) {
-          nearest.sort((a, b) => a.distSq - b.distSq);
-          nearest.length = glowCount;
-        }
-      }
-    }
-
-    nearest.sort((a, b) => a.distSq - b.distSq);
-    return nearest;
-  }
-
-  function updateParticleGlowLights({ baseHue, hueType, nearestParticles }) {
-    const saturation = hueType === 'warm' || hueType === 'rainbow' ? 1.0 : 0;
-
-    for (let i = 0; i < glowCount; i++) {
-      const light = glowLights[i];
-      if (i < nearestParticles.length) {
-        const particle = nearestParticles[i];
-        light.position.set(particle.x, particle.y, particle.z);
-        light.intensity = (1 - Math.sqrt(particle.distSq) / GLOW_RADIUS) * 6;
-        light.color.setHSL(baseHue, saturation, 0.5);
-      } else {
-        light.intensity = 0;
-      }
-    }
   }
 
   // ── Scene lighting style effects ───────────────────────────────────────────
@@ -499,55 +282,6 @@ export function createLightingRig({ scene, currentSetDef, getCurrentModelIndex, 
 
   // ── Per-frame update entry points ───────────────────────────────────────────
 
-  function updateParticleLighting() {
-    resetAllLights();
-    ambient.color.set(0xffffff);
-    const isBoosting = getIsBoosting ? getIsBoosting() : false;
-    ambient.intensity = isBoosting ? 0.34 : 0.22;
-    applyCloudAmbientFactor();
-
-    const monolith = getMonolith();
-    if (monolith) {
-      // Keep the aircraft readable over textured terrain even when particle
-      // glow lights are not close enough to illuminate the model.
-      dirRingLight.visible = true;
-      dirRingLight.position.set(
-        monolith.position.x - 3,
-        monolith.position.y + 7,
-        monolith.position.z + 8,
-      );
-      dirRingLight.target.position.copy(monolith.position);
-      dirRingLight.target.position.y += 1.4;
-      dirRingLight.target.updateMatrixWorld();
-      dirRingLight.intensity = isBoosting ? 1.8 : 1.05;
-
-      dirRingLight2.visible = true;
-      dirRingLight2.position.set(
-        monolith.position.x + 5,
-        monolith.position.y + 3,
-        monolith.position.z + 4,
-      );
-      dirRingLight2.target.position.copy(monolith.position);
-      dirRingLight2.target.updateMatrixWorld();
-      dirRingLight2.intensity = isBoosting ? 0.65 : 0.38;
-    }
-
-    const nowMs = Date.now();
-    const positions = animateParticlePositions({ nowMs });
-    const t = nowMs * 0.005;
-    const hueType = currentSetDef().particleHue;
-    let baseHue = getParticleBaseHue({ hueType, time: t });
-
-    // Throttle color + glow-light computation to every 4th frame to reduce
-    // the per-frame cost of iterating all 5000 particles on the CPU.
-    if (lightFrame % 4 === 0) {
-      baseHue = updateParticleColors({ time: t, hueType });
-      const nearestParticles = collectNearestParticlesToMonolith(positions, monolith.position);
-      updateParticleGlowLights({ baseHue, hueType, nearestParticles });
-    }
-    lightFrame++;
-  }
-
   function updateSceneLighting({ forceRefresh = false } = {}) {
     const style = getLightingStyle();
     const effect = sceneLightingEffects[style] ?? sceneLightingEffects.pointRing;
@@ -598,14 +332,8 @@ export function createLightingRig({ scene, currentSetDef, getCurrentModelIndex, 
     streetLight2.intensity = 1.5 * getPulse(p2);
   }
 
-  function updateBackgroundStars({ cameraPosition }) {
-    backgroundStars.position.copy(cameraPosition);
-  }
-
   function dispose() {
     scene.remove(ambient);
-    scene.remove(particles);
-    scene.remove(backgroundStars);
     scene.remove(ringMesh);
     scene.remove(ringLight);
     scene.remove(ringLight2);
@@ -619,27 +347,13 @@ export function createLightingRig({ scene, currentSetDef, getCurrentModelIndex, 
     scene.remove(coolLight);
     scene.remove(heroSpotLight);
     scene.remove(heroSpotLight.target);
-    glowLights.forEach((light) => {
-      scene.remove(light);
-    });
-
-    particleGeo.dispose();
-    particleMat.dispose();
-    backgroundStarGeometries.forEach((geometry) => geometry.dispose());
-    backgroundStarMaterials.forEach((material) => material.dispose());
-    particleTexture.dispose();
     ringGeometry.dispose();
     ringMaterial.dispose();
   }
 
   return {
     animateBloomRing,
-    clearParticleGlow,
-    backgroundStars,
     dispose,
-    particles,
-    updateBackgroundStars,
-    updateParticleLighting,
     updateSceneLighting,
   };
 }
