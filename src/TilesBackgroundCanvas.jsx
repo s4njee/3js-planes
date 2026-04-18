@@ -21,6 +21,7 @@ import { STBNLoader, DEFAULT_STBN_URL } from '@takram/three-geospatial';
 import { DitheringEffect, LensFlareEffect } from '@takram/three-geospatial-effects';
 import { resolveAssetUrl } from './monolith/asset-url.js';
 import { flightState, tickAutopilot, cancelAutopilot, requestAutopilot, autopilot } from './flight-store.js';
+import { timeOfDayState, subscribe as subscribeTimeOfDay } from './time-of-day-store.js';
 import CitySearch from './CitySearch.jsx';
 import { shouldSuppressGlobalShortcuts } from './keyboard-shortcuts.js';
 import { publishBackgroundPerformanceSnapshot } from './shared/performance/index.ts';
@@ -268,10 +269,10 @@ export default function TilesBackgroundCanvas() {
     const sunDirection = new THREE.Vector3();
 
     const updateSunDirection = () => {
-      // Use local solar noon: offset UTC so the sun is overhead at the current longitude
-      const lonDeg = flightState.lon / DEG2RAD;
-      const localNoonUTC = 12 - lonDeg / 15; // hours
-      const date = new Date(Date.UTC(2024, 2, 1) + localNoonUTC * 3600000);
+      // Use the shared time-of-day store (driven by the on-screen slider).
+      // hourUTC is the raw UTC hour from getSunDirectionECEF convention.
+      const ms = timeOfDayState.hourUTC * 3600000;
+      const date = new Date(Date.UTC(2024, 2, 1) + ms);
       getSunDirectionECEF(date, sunDirection);
       aerialPerspective.sunDirection.copy(sunDirection);
       clouds.sunDirection.copy(sunDirection);
@@ -347,7 +348,6 @@ export default function TilesBackgroundCanvas() {
       effectAdapters.cloudsAtmosphere,
       effectAdapters.lensFlare,
       effectAdapters.smaa,
-      effectAdapters.dithering,
     ];
 
     const applyBackgroundQuality = (quality) => {
@@ -536,6 +536,12 @@ export default function TilesBackgroundCanvas() {
       updateSunDirection();
     })();
 
+    // Update sun when the on-screen time-of-day slider changes
+    const unsubTimeOfDay = subscribeTimeOfDay(() => {
+      updateSunDirection();
+      lastSunLon = flightState.lon;
+    });
+
     const onResize = () => {
       camera.aspect = window.innerWidth / window.innerHeight;
       camera.updateProjectionMatrix();
@@ -594,6 +600,7 @@ export default function TilesBackgroundCanvas() {
 
     return () => {
       cancelAnimationFrame(animId);
+      unsubTimeOfDay();
       window.removeEventListener('resize', onResize);
       window.removeEventListener('keydown', onKeyDown);
       window.removeEventListener('keyup', onKeyUp);

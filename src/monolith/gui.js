@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import GUI from 'lil-gui';
+import { setHour, subscribe } from '../time-of-day-store.js';
 
 // ── GUI controls ──────────────────────────────────────────────────────────────
 // Wraps lil-gui to provide a floating debug panel for Monolith.
@@ -60,6 +61,7 @@ export function createDefaultGuiParams() {
     shimmerOffsetX: 6.13,
     shimmerOffsetY: 0.41,
     shimmerOffsetZ: 1.4,
+    timeOfDayUTC: 12,
   };
 }
 
@@ -152,6 +154,14 @@ export function createGuiControls({
   });
   sceneFolder.add(guiParams, 'whiteMode').name('White Mode').onChange((value) => {
     onWhiteModeChange(value);
+  });
+
+  const timeFolder = gui.addFolder('Time of Day');
+  timeFolder.add(guiParams, 'timeOfDayUTC', 0, 24, 0.01).name('Hour (UTC)').onChange((v) => setHour(v));
+  // Keep guiParams in sync when the on-screen slider changes the store
+  subscribe((h) => {
+    guiParams.timeOfDayUTC = h;
+    timeFolder.controllers.forEach((c) => c.updateDisplay());
   });
 
   const transformFolder = gui.addFolder('Model Transform');

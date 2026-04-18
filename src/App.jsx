@@ -3,6 +3,7 @@ import React, { lazy, Suspense } from 'react';
 const MonolithCanvas = lazy(() => import('./MonolithCanvas.jsx'));
 const TilesBackgroundCanvas = lazy(() => import('./TilesBackgroundCanvas.jsx'));
 const Minimap = lazy(() => import('./Minimap.jsx'));
+const TimeOfDaySlider = lazy(() => import('./TimeOfDaySlider.jsx'));
 
 const OVERLAY_STYLE = {
   position: 'fixed',
@@ -19,6 +20,7 @@ export default function App() {
         <MonolithCanvas />
       </div>
       <Minimap />
+      <TimeOfDaySlider />
     </Suspense>
   );
 }

@@ -1,4 +1,7 @@
 import * as THREE from 'three';
+import { timeOfDayState } from '../time-of-day-store.js';
+import { evaluateTimeOfDay } from '../solar-position.js';
+import { flightState } from '../flight-store.js';
 
 // ── Lighting rig ──────────────────────────────────────────────────────────────
 // Creates and animates all Three.js lights used by MonolithScene.
@@ -98,11 +101,12 @@ export function createLightingRig({ scene, currentSetDef, getCurrentModelIndex, 
   }
 
   function getAmbientOverrideSignature() {
+    const todKey = Math.round(timeOfDayState.hourUTC * 10);
     if (!guiParams.ambientOverrideEnabled) {
-      return 'off';
+      return `off:${todKey}`;
     }
 
-    return `${guiParams.ambientColor}:${guiParams.ambientIntensity}`;
+    return `${guiParams.ambientColor}:${guiParams.ambientIntensity}:${todKey}`;
   }
 
   function applyCloudAmbientFactor() {
@@ -262,8 +266,15 @@ export function createLightingRig({ scene, currentSetDef, getCurrentModelIndex, 
       ambient.intensity = 2.8;
     },
 
-    pointRing: ({ nowMs }) => {
-      animatePointRingPair({ nowMs, intensityScale: 5 });
+    pointRing: () => {
+      // Static overhead key light + softer fill from below
+      ambient.intensity = 0.4;
+      ringLight.distance = 40;
+      ringLight2.distance = 40;
+      ringLight.position.set(0, 12, 2);
+      ringLight.intensity = 8;
+      ringLight2.position.set(0, 4, -3);
+      ringLight2.intensity = 3;
     },
   };
 
@@ -277,7 +288,7 @@ export function createLightingRig({ scene, currentSetDef, getCurrentModelIndex, 
     streetlight: { animated: true, heroSpotlightIntensity: 5.5 },
     ambientBright: { animated: false, heroSpotlightIntensity: 0 },
     ambientOnly: { animated: false, heroSpotlightIntensity: 0 },
-    pointRing: { animated: true, heroSpotlightIntensity: 0 },
+    pointRing: { animated: false, heroSpotlightIntensity: 0 },
   };
 
   // ── Per-frame update entry points ───────────────────────────────────────────
@@ -314,6 +325,32 @@ export function createLightingRig({ scene, currentSetDef, getCurrentModelIndex, 
 
     applyAmbientOverrides();
     applyCloudAmbientFactor();
+
+    // ── Time-of-day pass ──────────────────────────────────────────────────────
+    const tod = evaluateTimeOfDay({
+      hourUTC: timeOfDayState.hourUTC,
+      latRad: flightState.lat,
+      lonRad: flightState.lon,
+    });
+
+    if (!guiParams.ambientOverrideEnabled) {
+      ambient.intensity = tod.ambientIntensity;
+      ambient.color.copy(tod.ambientColor);
+    }
+
+    // Use dirRingLight as the sun when the current style hasn't activated it
+    if (!dirRingLight.visible) {
+      dirRingLight.visible = true;
+      dirRingLight.position.copy(tod.sunDir).multiplyScalar(20);
+      dirRingLight.color.copy(tod.sunColor);
+      dirRingLight.intensity = tod.sunIntensity;
+      dirRingLight.target.position.set(0, 0, 0);
+      dirRingLight.target.updateMatrixWorld();
+    }
+
+    // Drive body background from TOD palette (keeps MonolithCanvas transparent
+    // so the terrain canvas beneath it remains visible)
+    document.body.style.background = tod.backgroundColor.getStyle();
   }
 
   function animateBloomRing() {
