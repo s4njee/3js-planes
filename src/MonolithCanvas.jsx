@@ -1385,6 +1385,16 @@ function MonolithScene() {
 
   useFrame((_, delta) => {
     const elapsed = clockRef.current.getElapsedTime();
+
+    // Sync boost from flightState (set by auto-steer / spacebar in TilesBackground)
+    if (supportsAnimationSpeedBoost()) {
+      const shouldBoost = flightState.boost;
+      if (shouldBoost !== stateRef.current.animationSpeedBoostEnabled) {
+        stateRef.current.animationSpeedBoostEnabled = shouldBoost;
+        syncAnimationMixerSpeed();
+      }
+    }
+
     const boostVisualState = boostVisualStateRef.current;
     const boostShakeOffset = boostVisualState.lastShakeOffset;
     const currentModel = getCurrentModelDef();

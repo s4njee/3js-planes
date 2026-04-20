@@ -20,8 +20,15 @@ const SHELL_STYLE = {
   overflow: 'hidden',
 };
 
+const INPUT_ROW_STYLE = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 0,
+};
+
 const INPUT_STYLE = {
-  width: '100%',
+  flex: 1,
+  minWidth: 0,
   boxSizing: 'border-box',
   border: '0',
   outline: 'none',
@@ -30,6 +37,22 @@ const INPUT_STYLE = {
   padding: '14px 16px',
   font: '600 14px/1.2 ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
   letterSpacing: '0.01em',
+};
+
+const MODE_BTN_STYLE = {
+  flexShrink: 0,
+  margin: '0 10px 0 0',
+  padding: '5px 10px',
+  font: '600 11px/1 ui-sans-serif, system-ui, sans-serif',
+  letterSpacing: '0.03em',
+  color: 'rgba(255,255,255,0.8)',
+  background: 'rgba(255,255,255,0.08)',
+  border: '1px solid rgba(255,255,255,0.18)',
+  borderRadius: 8,
+  cursor: 'pointer',
+  userSelect: 'none',
+  whiteSpace: 'nowrap',
+  transition: 'all 0.15s',
 };
 
 const HINT_STYLE = {
@@ -76,6 +99,7 @@ export default function CitySearch({ onSelectCity }) {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState('');
   const [open, setOpen] = useState(false);
+  const [mode, setMode] = useState('teleport'); // 'teleport' | 'fly'
   const inputRef = useRef(null);
   const abortRef = useRef(null);
 
@@ -109,19 +133,14 @@ export default function CitySearch({ onSelectCity }) {
 
       fetch(url.toString(), {
         signal: controller.signal,
-        headers: {
-          Accept: 'application/json',
-        },
+        headers: { Accept: 'application/json' },
       })
         .then(async (response) => {
-          if (!response.ok) {
-            throw new Error(`HTTP ${response.status}`);
-          }
+          if (!response.ok) throw new Error(`HTTP ${response.status}`);
           return response.json();
         })
         .then((data) => {
-          const nextResults = Array.isArray(data) ? data : [];
-          setResults(nextResults);
+          setResults(Array.isArray(data) ? data : []);
           setOpen(true);
           setIsLoading(false);
         })
@@ -133,9 +152,7 @@ export default function CitySearch({ onSelectCity }) {
         });
     }, 250);
 
-    return () => {
-      window.clearTimeout(timeoutId);
-    };
+    return () => window.clearTimeout(timeoutId);
   }, [trimmedQuery]);
 
   const selectResult = (result) => {
@@ -148,12 +165,12 @@ export default function CitySearch({ onSelectCity }) {
     setResults([]);
     setError('');
     setOpen(false);
-    onSelectCity?.({
-      lat,
-      lon,
-      label,
-    });
+    onSelectCity?.({ lat, lon, label }, mode);
     inputRef.current?.blur();
+  };
+
+  const toggleMode = () => {
+    setMode((m) => (m === 'teleport' ? 'fly' : 'teleport'));
   };
 
   const onKeyDown = (event) => {
@@ -171,19 +188,37 @@ export default function CitySearch({ onSelectCity }) {
   return (
     <div style={PANEL_STYLE} data-shortcut-scope="city-search">
       <div style={SHELL_STYLE}>
-        <input
-          ref={inputRef}
-          aria-label="Search city"
-          style={INPUT_STYLE}
-          value={query}
-          placeholder="Search any city in the world"
-          onChange={(event) => {
-            setQuery(event.target.value);
-            setOpen(true);
-          }}
-          onFocus={() => setOpen(true)}
-          onKeyDown={onKeyDown}
-        />
+        <div style={INPUT_ROW_STYLE}>
+          <input
+            ref={inputRef}
+            aria-label="Search city"
+            style={INPUT_STYLE}
+            value={query}
+            placeholder="Search any city in the world"
+            onChange={(event) => {
+              setQuery(event.target.value);
+              setOpen(true);
+            }}
+            onFocus={() => setOpen(true)}
+            onKeyDown={onKeyDown}
+          />
+          <button
+            type="button"
+            style={{
+              ...MODE_BTN_STYLE,
+              background: mode === 'fly'
+                ? 'rgba(68, 170, 255, 0.2)'
+                : 'rgba(255,255,255,0.08)',
+              borderColor: mode === 'fly'
+                ? 'rgba(68, 170, 255, 0.5)'
+                : 'rgba(255,255,255,0.18)',
+            }}
+            onClick={toggleMode}
+            title={mode === 'teleport' ? 'Switch to fly mode' : 'Switch to teleport mode'}
+          >
+            {mode === 'teleport' ? '⚡ Teleport' : '✈ Fly'}
+          </button>
+        </div>
         <div style={HINT_STYLE}>
           {isLoading ? 'Searching...' : error || 'Press Enter to pick the first result'}
         </div>

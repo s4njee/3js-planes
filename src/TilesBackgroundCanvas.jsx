@@ -156,7 +156,17 @@ export default function TilesBackgroundCanvas() {
       updateSunDirection();
     };
 
-    teleportRef.current = teleportTo;
+    const flyTo = ({ lat, lon, label }) => {
+      flightState.targetLat = lat * DEG2RAD;
+      flightState.targetLon = lon * DEG2RAD;
+      flightState.boost = true;
+      if (label) {
+        flightState.cityRevealLabel = label;
+        flightState.cityRevealVersion += 1;
+      }
+    };
+
+    teleportRef.current = { teleportTo, flyTo };
     updateCamera();
 
     // GUI
@@ -365,10 +375,12 @@ export default function TilesBackgroundCanvas() {
           const distSq = dLon * dLon + dLat * dLat;
           const arrivalThreshold = 0.0001; // ~11m in radians
           if (distSq < arrivalThreshold * arrivalThreshold) {
-            // Arrived — clear target
+            // Arrived — clear target and disable boost
             flightState.targetLat = null;
             flightState.targetLon = null;
+            flightState.boost = false;
           } else {
+            flightState.boost = true;
             const desiredHeading = Math.atan2(dLon, dLat);
             let diff = desiredHeading - flightState.heading;
             // Normalize to [-PI, PI]
@@ -410,8 +422,12 @@ export default function TilesBackgroundCanvas() {
   return (
     <>
       <canvas ref={canvasRef} style={{ position: 'fixed', inset: 0, width: '100%', height: '100%', zIndex: 0 }} />
-      <CitySearch onSelectCity={(city) => {
-        teleportRef.current?.(city);
+      <CitySearch onSelectCity={(city, mode) => {
+        if (mode === 'fly') {
+          teleportRef.current?.flyTo(city);
+        } else {
+          teleportRef.current?.teleportTo(city);
+        }
       }} />
     </>
   );
