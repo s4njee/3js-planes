@@ -142,6 +142,7 @@ function MonolithScene() {
     ambientFactor: 1,
   });
   const appliedTeleportVersionRef = useRef(flightCommandState.teleportVersion);
+  const appliedCityRevealVersionRef = useRef(flightState.cityRevealVersion);
   const terrainTilesRef = useRef([]);
   const flightControlRef = useRef(createInitialFlightControl());
   const stateRef = useRef(createInitialMonolithState());
@@ -1405,6 +1406,16 @@ function MonolithScene() {
     }
 
     applyPendingTeleport();
+
+    // ── City reveal label ───────────────────────────────────────────────
+    if (flightState.cityRevealVersion !== appliedCityRevealVersionRef.current) {
+      appliedCityRevealVersionRef.current = flightState.cityRevealVersion;
+      if (flightState.cityRevealLabel) {
+        // Extract short city name from the full Nominatim display_name
+        const shortName = flightState.cityRevealLabel.split(',')[0].trim();
+        uiRef.current?.showCityReveal(shortName);
+      }
+    }
 
     // ── Camera follow ───────────────────────────────────────────────────
     const cockpitActive = cockpitCameraRef.current?.getMode() !== COCKPIT_MODE_OFF;

@@ -21,6 +21,9 @@ export const flightState = {
   sunDateOverride: null,
   /** Current model index — written by MonolithCanvas, read by TilesBackgroundCanvas for speed. */
   currentModelIndex: 0,
+  /** City name to display briefly after teleport. Cleared after consumption. */
+  cityRevealLabel: null,
+  cityRevealVersion: 0,
 };
 
 // Shared one-shot teleport command. The background scene requests a city

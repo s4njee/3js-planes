@@ -137,11 +137,15 @@ export default function TilesBackgroundCanvas() {
       camera.matrix.decompose(camera.position, camera.quaternion, camera.scale);
     };
 
-    const teleportTo = ({ lat, lon }) => {
+    const teleportTo = ({ lat, lon, label }) => {
       flightState.lat = lat * DEG2RAD;
       flightState.lon = lon * DEG2RAD;
       flightState.heading = -90 * DEG2RAD;
       flightState.alt = Math.max(ALT_MIN, flightState.alt);
+      if (label) {
+        flightState.cityRevealLabel = label;
+        flightState.cityRevealVersion += 1;
+      }
       requestFlightTeleport({
         lat: flightState.lat,
         lon: flightState.lon,

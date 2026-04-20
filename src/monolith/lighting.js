@@ -57,7 +57,7 @@ export function createLightingRig({ scene, currentSetDef, getCurrentModelIndex, 
   const particles = new THREE.Points(particleGeo, particleMat);
   particles.visible = false;
   particles.frustumCulled = false;
-  scene.add(particles);
+  // Particles removed from scene — not added
 
   const backgroundStarConfigs = [
     { count: 360, radiusMin: 44, radiusMax: 58, size: 0.7, opacity: 0.95 },
@@ -118,7 +118,7 @@ export function createLightingRig({ scene, currentSetDef, getCurrentModelIndex, 
 
   backgroundStars.frustumCulled = false;
   backgroundStars.visible = false;
-  scene.add(backgroundStars);
+  // Background stars removed from scene — not added
 
   const glowLights = [];
   const glowCount = 6;

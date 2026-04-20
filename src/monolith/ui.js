@@ -20,6 +20,29 @@ export function createUI({
   getCurrentCityIndex,
   onSwitchCity,
 }) {
+  // ── City reveal label ──────────────────────────────────────────────────
+
+  const cityReveal = document.createElement('div');
+  cityReveal.style.cssText = [
+    'position:fixed',
+    'bottom:38%',
+    'left:50%',
+    'transform:translateX(-50%)',
+    'color:rgba(255,255,255,0.88)',
+    'font:300 clamp(28px, 5vw, 56px)/1 "Helvetica Neue", Helvetica, Arial, sans-serif',
+    'letter-spacing:0.22em',
+    'text-transform:uppercase',
+    'opacity:0',
+    'transition:opacity 0.8s ease-out',
+    'pointer-events:none',
+    'text-shadow:0 2px 12px rgba(0,0,0,0.5)',
+    'white-space:nowrap',
+    'z-index:5',
+  ].join(';');
+  document.body.appendChild(cityReveal);
+
+  let cityRevealTimeout;
+
   // ── Model name label ──────────────────────────────────────────────────────
 
   const label = document.createElement('div');
@@ -77,6 +100,24 @@ export function createUI({
     cityButtons.forEach((button, index) => styleButton(button, index === getCurrentCityIndex()));
   }
 
+  function showCityReveal(name) {
+    if (!name) return;
+    clearTimeout(cityRevealTimeout);
+    cityReveal.textContent = name.toUpperCase();
+    cityReveal.style.opacity = '0';
+    // Force reflow so the transition restarts cleanly
+    void cityReveal.offsetWidth;
+    cityReveal.style.opacity = '1';
+    cityRevealTimeout = setTimeout(() => {
+      cityReveal.style.transition = 'opacity 1.2s ease-in';
+      cityReveal.style.opacity = '0';
+      // Reset transition for next reveal
+      setTimeout(() => {
+        cityReveal.style.transition = 'opacity 0.8s ease-out';
+      }, 1300);
+    }, 2200);
+  }
+
   function applyWhiteMode() {
     const textColor = getWhiteMode() ? '#000' : '#fff';
     label.style.color = textColor;
@@ -89,11 +130,14 @@ export function createUI({
     applyWhiteMode,
     destroy: () => {
       label.remove();
+      cityReveal.remove();
       cityNav.remove();
       clearTimeout(labelTimeout);
+      clearTimeout(cityRevealTimeout);
     },
     updateLabel,
     updateCityButtons,
     updateModeButtons: () => {},
+    showCityReveal,
   };
 }
