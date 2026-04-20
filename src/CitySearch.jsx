@@ -173,6 +173,13 @@ export default function CitySearch({ onSelectCity }) {
     setMode((m) => (m === 'teleport' ? 'fly' : 'teleport'));
   };
 
+  const modeBtn = (value, label) => ({
+    ...MODE_BTN_STYLE,
+    background: mode === value ? 'rgba(255,255,255,0.18)' : 'transparent',
+    borderColor: mode === value ? 'rgba(255,255,255,0.45)' : 'rgba(255,255,255,0.12)',
+    color: mode === value ? '#fff' : 'rgba(255,255,255,0.45)',
+  });
+
   const onKeyDown = (event) => {
     if (event.key === 'Escape') {
       setOpen(false);
@@ -202,22 +209,22 @@ export default function CitySearch({ onSelectCity }) {
             onFocus={() => setOpen(true)}
             onKeyDown={onKeyDown}
           />
-          <button
-            type="button"
-            style={{
-              ...MODE_BTN_STYLE,
-              background: mode === 'fly'
-                ? 'rgba(68, 170, 255, 0.2)'
-                : 'rgba(255,255,255,0.08)',
-              borderColor: mode === 'fly'
-                ? 'rgba(68, 170, 255, 0.5)'
-                : 'rgba(255,255,255,0.18)',
-            }}
-            onClick={toggleMode}
-            title={mode === 'teleport' ? 'Switch to fly mode' : 'Switch to teleport mode'}
-          >
-            {mode === 'teleport' ? '⚡ Teleport' : '✈ Fly'}
-          </button>
+          <div style={{ display: 'flex', gap: 4, marginRight: 10, flexShrink: 0 }}>
+            <button
+              type="button"
+              style={modeBtn('teleport')}
+              onClick={() => setMode('teleport')}
+            >
+              ⚡ Teleport
+            </button>
+            <button
+              type="button"
+              style={modeBtn('fly')}
+              onClick={() => setMode('fly')}
+            >
+              ✈ Fly
+            </button>
+          </div>
         </div>
         <div style={HINT_STYLE}>
           {isLoading ? 'Searching...' : error || 'Press Enter to pick the first result'}
