@@ -19,6 +19,8 @@ export const flightState = {
   targetLon: null,
   /** When set, overrides the Cesium sky sun to this Date instead of local noon. */
   sunDateOverride: null,
+  /** Current model index — written by MonolithCanvas, read by TilesBackgroundCanvas for speed. */
+  currentModelIndex: 0,
 };
 
 // Shared one-shot teleport command. The background scene requests a city

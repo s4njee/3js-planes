@@ -56,6 +56,7 @@ export function createLightingRig({ scene, currentSetDef, getCurrentModelIndex, 
   });
   const particles = new THREE.Points(particleGeo, particleMat);
   particles.visible = false;
+  particles.frustumCulled = false;
   scene.add(particles);
 
   const backgroundStarConfigs = [
@@ -116,6 +117,7 @@ export function createLightingRig({ scene, currentSetDef, getCurrentModelIndex, 
   });
 
   backgroundStars.frustumCulled = false;
+  backgroundStars.visible = false;
   scene.add(backgroundStars);
 
   const glowLights = [];

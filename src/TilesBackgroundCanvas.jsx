@@ -21,6 +21,7 @@ import { STBNLoader, DEFAULT_STBN_URL } from '@takram/three-geospatial';
 import { DitheringEffect, LensFlareEffect } from '@takram/three-geospatial-effects';
 import { resolveAssetUrl } from './monolith/asset-url.js';
 import { flightState, requestFlightTeleport } from './flight-store.js';
+import { MODEL_SET_DEF } from './monolith/set-defs.js';
 import CitySearch from './CitySearch.jsx';
 import { shouldSuppressGlobalShortcuts } from './keyboard-shortcuts.js';
 
@@ -37,12 +38,21 @@ export default function TilesBackgroundCanvas() {
     let prevTime = 0;
     let deltaTime = 0;
 
-    // renderer
-    const renderer = new THREE.WebGLRenderer({
-      canvas,
-      outputBufferType: THREE.HalfFloatType,
-      antialias: true,
-    });
+    // renderer — try HalfFloat first, fall back to default if unsupported
+    let renderer;
+    try {
+      renderer = new THREE.WebGLRenderer({
+        canvas,
+        outputBufferType: THREE.HalfFloatType,
+        antialias: true,
+      });
+    } catch (_e) {
+      console.warn('[TilesBackground] HalfFloatType not supported, falling back to default buffer');
+      renderer = new THREE.WebGLRenderer({
+        canvas,
+        antialias: true,
+      });
+    }
     renderer.setPixelRatio(window.devicePixelRatio);
     renderer.setSize(window.innerWidth, window.innerHeight);
     renderer.toneMapping = THREE.AgXToneMapping;
@@ -81,9 +91,23 @@ export default function TilesBackgroundCanvas() {
 
     // flightState is module-shared (see flight-store.js) so the minimap and
     // search widget can share a single location without prop drilling.
-    const ALT_MIN = 500, ALT_MAX = 3500;
-    const FLIGHT_SPEED = 0.00004;
+    const ALT_MIN = 300, ALT_MAX = 26000;
+    const EARTH_RADIUS_M = 6_371_000;
+    const DEFAULT_SPEED_MPS = 255; // ~subsonic airliner fallback
     const TURN_SPEED = 0.8;
+
+    /** Convert m/s to radians/s on the globe surface. */
+    const mpsToRadPerSec = (mps) => mps / EARTH_RADIUS_M;
+
+    /** Get the current model's cruise speed in rad/s. */
+    const getFlightSpeed = () => {
+      if (Number.isFinite(flightState._speedOverrideMps)) {
+        return mpsToRadPerSec(flightState._speedOverrideMps);
+      }
+      const model = MODEL_SET_DEF.models[flightState.currentModelIndex];
+      const mps = model?.speedMps ?? DEFAULT_SPEED_MPS;
+      return mpsToRadPerSec(mps);
+    };
 
     const onKeyDown = (e) => {
       if (shouldSuppressGlobalShortcuts(e)) return;
@@ -140,12 +164,12 @@ export default function TilesBackgroundCanvas() {
     posFolder.add(latProxy, 'v', -85, 85, 0.0001).name('Latitude °').onChange(v => { flightState.lat = v * DEG2RAD; updateCamera(); });
     const lonProxy = { v: flightState.lon / DEG2RAD };
     posFolder.add(lonProxy, 'v', -180, 180, 0.0001).name('Longitude °').onChange(v => { flightState.lon = v * DEG2RAD; updateCamera(); });
-    const speedProxy = { v: FLIGHT_SPEED };
-    gui.add(speedProxy, 'v', 0, 0.001, 0.000001).name('Speed').onChange(v => { flightState._speed = v; });
+    const speedProxy = { v: DEFAULT_SPEED_MPS };
+    gui.add(speedProxy, 'v', 0, 1200, 1).name('Speed (m/s)').onChange(v => { flightState._speedOverrideMps = v; });
     const headingProxy = { v: flightState.heading / DEG2RAD };
     gui.add(headingProxy, 'v', -180, 180, 0.1).name('Heading °').onChange(v => { flightState.heading = v * DEG2RAD; updateCamera(); });
-    gui.add({ v: 10 }, 'v', 1, 30, 0.1).name('Exposure').onChange(v => { renderer.toneMappingExposure = v; });
-    gui.add({ v: 0.3 }, 'v', 0, 1, 0.01).name('Cloud Coverage').onChange(v => { clouds.coverage = v; });
+    gui.add({ v: 10 }, 'v', 1, 30, 0.1).name('Exposure').onChange(v => { altAtmo.baseExposure = v; });
+    gui.add({ v: 0.3 }, 'v', 0, 1, 0.01).name('Cloud Coverage').onChange(v => { altAtmo.baseCoverage = v; });
 
     // sun
     const sunDirection = new THREE.Vector3();
@@ -220,20 +244,32 @@ export default function TilesBackgroundCanvas() {
       }
     }
 
-    renderer.setEffects([
-      new EffectPassAdapter(normalPass),
-      new EffectPassAdapter(new EffectPass(camera, clouds, aerialPerspective)),
-      new EffectPassAdapter(new EffectPass(camera, new LensFlareEffect())),
-      new EffectPassAdapter(new EffectPass(camera, new SMAAEffect())),
-      new EffectPassAdapter(new EffectPass(camera, new DitheringEffect())),
-    ]);
+    if (typeof renderer.setEffects === 'function') {
+      try {
+        renderer.setEffects([
+          new EffectPassAdapter(normalPass),
+          new EffectPassAdapter(new EffectPass(camera, clouds, aerialPerspective)),
+          new EffectPassAdapter(new EffectPass(camera, new LensFlareEffect())),
+          new EffectPassAdapter(new EffectPass(camera, new SMAAEffect())),
+          new EffectPassAdapter(new EffectPass(camera, new DitheringEffect())),
+        ]);
+      } catch (e) {
+        console.warn('[TilesBackground] setEffects failed, rendering without post-processing:', e);
+      }
+    } else {
+      console.warn('[TilesBackground] renderer.setEffects not available — post-processing disabled');
+    }
 
     // async init: precomputed textures + cloud textures
     (async () => {
-      const texturesGenerator = new PrecomputedTexturesGenerator(renderer);
-      const textures = await texturesGenerator.update();
-      Object.assign(aerialPerspective, textures);
-      Object.assign(clouds, textures);
+      try {
+        const texturesGenerator = new PrecomputedTexturesGenerator(renderer);
+        const textures = await texturesGenerator.update();
+        Object.assign(aerialPerspective, textures);
+        Object.assign(clouds, textures);
+      } catch (e) {
+        console.warn('[TilesBackground] Precomputed textures failed:', e);
+      }
 
       const textureLoader = new THREE.TextureLoader();
       const loadTex = (url, prop) => textureLoader.load(url, (t) => {
@@ -275,6 +311,41 @@ export default function TilesBackgroundCanvas() {
     };
     window.addEventListener('resize', onResize);
 
+    // ── Altitude-aware atmosphere state ────────────────────────────────────
+    // Smoothed altitude value prevents flickering when alt changes rapidly.
+    const altAtmo = {
+      smoothAlt: flightState.alt,       // lerped toward flightState.alt each frame
+      baseCoverage: 0.3,                // GUI-set cloud coverage baseline
+      baseExposure: 10,                 // GUI-set exposure baseline
+    };
+
+    /** Map altitude to atmosphere parameters and apply them. */
+    const updateAltitudeAtmosphere = (dt) => {
+      // Smooth altitude toward the real value
+      const lerpSpeed = 3.0;
+      altAtmo.smoothAlt += (flightState.alt - altAtmo.smoothAlt) * Math.min(1, lerpSpeed * dt);
+
+      const alt = altAtmo.smoothAlt;
+
+      // Normalised altitude bands (metres)
+      const tLow   = THREE.MathUtils.clamp((alt - 300) / 700, 0, 1);       // 300–1000m
+      const tMid   = THREE.MathUtils.clamp((alt - 1000) / 4000, 0, 1);     // 1000–5000m
+      const tHigh  = THREE.MathUtils.clamp((alt - 5000) / 10000, 0, 1);    // 5000–15000m
+      const tSpace = THREE.MathUtils.clamp((alt - 15000) / 11000, 0, 1);   // 15000–26000m
+
+      // Cloud coverage: thick at low alt, thins at high alt
+      const coverageScale = 1.0 - tHigh * 0.6 - tSpace * 0.35;
+      clouds.coverage = altAtmo.baseCoverage * Math.max(0.05, coverageScale);
+
+      // Haze: dense near ground, fades with height
+      const hazeValue = THREE.MathUtils.lerp(0.6, 0.0, tLow * 0.5 + tMid * 0.3 + tHigh * 0.2);
+      if (clouds.haze !== undefined) clouds.haze = hazeValue;
+
+      // Exposure: slightly brighter at altitude (thinner atmosphere)
+      const exposureBoost = 1.0 + tMid * 0.15 + tHigh * 0.25 + tSpace * 0.1;
+      renderer.toneMappingExposure = altAtmo.baseExposure * exposureBoost;
+    };
+
     const animate = (time) => {
       animId = requestAnimationFrame(animate);
       deltaTime = (time - prevTime) / 1000;
@@ -282,13 +353,14 @@ export default function TilesBackgroundCanvas() {
       if (deltaTime > 0 && deltaTime < 1) {
         if (flightState.left) flightState.heading -= TURN_SPEED * deltaTime;
         if (flightState.right) flightState.heading += TURN_SPEED * deltaTime;
-        const speed = (flightState._speed ?? FLIGHT_SPEED) * (flightState.boost ? 10 : 1) * deltaTime;
+        const speed = getFlightSpeed() * (flightState.boost ? 3 : 1) * deltaTime;
         flightState.lon += Math.sin(flightState.heading) * speed;
         flightState.lat += Math.cos(flightState.heading) * speed;
         if (flightState.up) flightState.alt = Math.min(ALT_MAX, flightState.alt + 300 * deltaTime * (flightState.boost ? 10 : 1));
         if (flightState.down) flightState.alt = Math.max(ALT_MIN, flightState.alt - 300 * deltaTime * (flightState.boost ? 10 : 1));
         updateCamera();
         updateSunDirection();
+        updateAltitudeAtmosphere(deltaTime);
       }
       tiles.update();
       renderer.render(scene, camera);

@@ -539,6 +539,7 @@ function MonolithScene() {
   const loadModel = async (index, { showProgressIfUncached = false } = {}) => {
     if (!loaderRef.current || index === stateRef.current.currentModelIndex) return;
     stateRef.current.currentModelIndex = index;
+    flightState.currentModelIndex = index;
     rebuildHeatShimmerMeshes();
     guiControlsRef.current?.rebuildEngineShimmerFolder();
     syncEffectSnapshot({ triggerGlitch: true });
@@ -721,6 +722,7 @@ function MonolithScene() {
 
   const loadDefaultModel = () => {
     stateRef.current.currentModelIndex = -1;
+    flightState.currentModelIndex = -1;
     stateRef.current.animationSpeedBoostEnabled = false;
     syncAnimationMixerSpeed();
 
@@ -1028,10 +1030,10 @@ function MonolithScene() {
         applySceneAppearance();
       };
 
-      toggleGoldenHour = () => activateTimeOfDay('sunrise');
+      toggleGoldenHour = () => activateTimeOfDay('sunset');
 
-      // Start in sunrise mode by default
-      activateTimeOfDay('sunrise');
+      // Start in golden-hour (sunset) mode by default
+      activateTimeOfDay('sunset');
 
       shareScene = async () => {
         const gh = goldenHourRef.current;
