@@ -106,7 +106,7 @@ export default function TilesBackgroundCanvas() {
       }
       const model = MODEL_SET_DEF.models[flightState.currentModelIndex];
       const mps = model?.speedMps ?? DEFAULT_SPEED_MPS;
-      return mpsToRadPerSec(mps);
+      return mpsToRadPerSec(mps) * 0.25;
     };
 
     const onKeyDown = (e) => {

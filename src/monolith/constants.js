@@ -74,7 +74,7 @@ export const GOD_RAYS_ENABLED = true;
 export const ELEVATION_SPEED = 5.5;
 export const ELEVATION_LERP_SPEED = 5.5;
 export const ELEVATION_MIN_OFFSET = -3.5;
-export const ELEVATION_MAX_OFFSET = 28.0;
+export const ELEVATION_MAX_OFFSET = 8.0;
 export const ELEVATION_PITCH_MAX = 0.2;
 export const ELEVATION_PITCH_LERP_SPEED = 6.5;
 

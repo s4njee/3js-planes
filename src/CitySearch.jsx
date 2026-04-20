@@ -34,7 +34,7 @@ const INPUT_STYLE = {
   outline: 'none',
   background: 'transparent',
   color: 'inherit',
-  padding: '14px 16px',
+  padding: '8px 16px',
   font: '600 14px/1.2 ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
   letterSpacing: '0.01em',
 };
@@ -209,7 +209,7 @@ export default function CitySearch({ onSelectCity }) {
             onFocus={() => setOpen(true)}
             onKeyDown={onKeyDown}
           />
-          <div style={{ display: 'flex', gap: 4, marginRight: 10, flexShrink: 0 }}>
+          <div style={{ display: 'flex', gap: 4, marginRight: 10, flexShrink: 0, alignItems: 'center' }}>
             <button
               type="button"
               style={modeBtn('teleport')}
@@ -226,9 +226,11 @@ export default function CitySearch({ onSelectCity }) {
             </button>
           </div>
         </div>
-        <div style={HINT_STYLE}>
-          {isLoading ? 'Searching...' : error || 'Press Enter to pick the first result'}
-        </div>
+        {(isLoading || error) && (
+          <div style={HINT_STYLE}>
+            {isLoading ? 'Searching...' : error}
+          </div>
+        )}
         {open && results.length > 0 && (
           <div style={RESULTS_STYLE}>
             {results.map((result) => (

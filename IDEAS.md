@@ -2,6 +2,40 @@
 
 This project already has a strong base: a cinematic aircraft scene, real city search, terrain-backed geospatial positioning, a live minimap, clouds, contrails, heat shimmer, and model switching. These ideas build on that rather than replacing it.
 
+## ✅ Implemented
+
+### Altitude-Aware Atmosphere ✅
+
+Sky, haze, and cloud density react to altitude. Low altitude gets more terrain haze and denser clouds; high altitude gets clearer horizon and thinner clouds. Uses smoothed altitude state to prevent flickering.
+
+### City Reveal Label ✅
+
+After a city selection, a tasteful uppercase label (TOKYO, REYKJAVIK, RIO DE JANEIRO) fades in near the horizon, holds briefly, then fades out. Gives each jump a sense of arrival.
+
+### Follow / Free Mode Toggle ✅
+
+Dragging the minimap breaks auto-centering and shows a Follow button. Clicking Follow re-centers on the aircraft. Only actual drags break follow — simple clicks pass through for destination setting.
+
+### Click-To-Fly From Minimap ✅
+
+Clicking anywhere on the minimap sets a destination. A dashed route line draws from the plane to the target, the plane auto-steers toward it with boost engaged, and the target clears on arrival.
+
+### Teleport / Fly Mode Toggle ✅
+
+The search bar has two mutually exclusive buttons: ⚡ Teleport (instant jump, default) and ✈ Fly (auto-steer with boost to destination). Both trigger the city reveal label.
+
+### Realistic Per-Aircraft Speeds ✅
+
+Each aircraft flies at its real-world cruise speed (SR-71 at 980 m/s, Apache at 70 m/s, etc.). Default speed is 0.25x with 3x boost multiplier. Altitude limits per aircraft defined in model defs.
+
+### Golden Hour Lighting ✅
+
+Real solar ephemeris drives sun position, color temperature, and ambient light. Defaults to sunset mode. Recomputes golden hour datetime on teleport so lighting stays consistent across locations. Toggle with H key.
+
+### Engine Shimmer On Boost ✅
+
+Heat shimmer activates during boost for aircraft with engine shimmer configs. Synced between the flight state and MonolithCanvas so both manual spacebar and auto-steer boost trigger the effect.
+
 ## High-Impact Interaction
 
 ### Flight Plans
@@ -13,15 +47,6 @@ Implementation notes:
 - Add a lightweight route layer to `Minimap.jsx`.
 - In `MonolithCanvas.jsx`, steer `worldYaw` toward the bearing to the next waypoint instead of instantly teleporting.
 
-### Fly-To Animation
-
-City search currently teleports. Make it feel like a cinematic jump: clouds streak, FOV widens, the minimap marker glides, then the aircraft emerges over the destination.
-
-Implementation notes:
-- Replace one-shot teleport with a timed transition command in `flight-store.js`.
-- Interpolate cartographic coordinates using great-circle-ish lerp for short hops.
-- Add a brief boost visual while the transition is active.
-
 ### Mission Cards
 
 After selecting a city, show a small "mission card" with the city name, local time, distance from the last city, and a simple objective like "cross the bay", "climb through cloud layer", or "follow the coast".
@@ -31,24 +56,7 @@ Implementation notes:
 - Track previous selected city in shared state.
 - Keep the card compact and transient so it does not compete with the scene.
 
-### Click-To-Fly From Minimap
-
-Allow clicking anywhere on the minimap to set a destination. Search is great for named places; click-to-fly makes exploration feel playful.
-
-Implementation notes:
-- Listen for MapLibre `click` events in `Minimap.jsx`.
-- Convert `event.lngLat` to a flight command.
-- Use the same transition path as city search so both inputs feel consistent.
-
 ## Visual Polish
-
-### Altitude-Aware Atmosphere
-
-Make the sky, haze, and cloud density react to altitude. Low altitude gets more terrain haze and shadowed clouds; high altitude gets deeper blue, clearer horizon, and thinner clouds.
-
-Implementation notes:
-- Use `flightState.alt` to drive `AerialPerspectiveEffect`, cloud coverage, and exposure.
-- Add a smoothed altitude visual state so changes do not flicker.
 
 ### Weather Presets
 
@@ -77,25 +85,7 @@ Implementation notes:
 - Fade it out with altitude.
 - Stretch it subtly with heading and speed.
 
-### City Reveal Label
-
-After a city selection, briefly render a tasteful label near the horizon: `TOKYO`, `REYKJAVIK`, `RIO DE JANEIRO`. It gives the jump a sense of arrival.
-
-Implementation notes:
-- Reuse the existing UI overlay pattern in `monolith/ui.js`.
-- Use uppercase city text and a short fade in/out.
-- Avoid permanent labels over the main view.
-
 ## Minimap And Navigation
-
-### Follow / Free Mode Toggle
-
-Dragging the minimap currently pauses auto-centering temporarily. Make it explicit: a small `Follow` button that re-centers the aircraft after the user pans away.
-
-Implementation notes:
-- Track `isFollowing` in `Minimap.jsx`.
-- Turn it off when the user drags or zooms.
-- Turn it on when the user clicks `Follow`.
 
 ### Heading And Range Rings
 
@@ -134,14 +124,6 @@ Implementation notes:
 - Use `MODEL_SET_DEF.models` as the data source.
 - Add a non-card, bottom or side dock UI so it does not obscure the aircraft.
 - Preload the next likely model with the existing model cache helper.
-
-### Plane-Specific Flight Feel
-
-Give each aircraft different motion personality: SR-71 fast and stable, Osprey slower with heavy turns, helicopter with hovering drift, F-35 with sharper pitch and bank.
-
-Implementation notes:
-- Extend model definitions with `turnRate`, `bankAmount`, `boostSpeedMps`, and `elevationResponsiveness`.
-- Feed those values into the existing flight-control interpolation.
 
 ### Gentle Autopilot
 
