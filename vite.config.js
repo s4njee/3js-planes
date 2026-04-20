@@ -2,6 +2,15 @@ import react from '@vitejs/plugin-react';
 import { defineConfig } from 'vite';
 
 export default defineConfig(() => ({
+  server: {
+    proxy: {
+      '/opensky-api': {
+        target: 'https://opensky-network.org',
+        changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/opensky-api/, '/api'),
+      },
+    },
+  },
   define: {
     __ASSET_VERSION__: JSON.stringify(Date.now().toString()),
   },

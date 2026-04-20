@@ -151,10 +151,15 @@ export default function TilesBackgroundCanvas() {
     const sunDirection = new THREE.Vector3();
 
     const updateSunDirection = () => {
-      // Use local solar noon: offset UTC so the sun is overhead at the current longitude
-      const lonDeg = flightState.lon / DEG2RAD;
-      const localNoonUTC = 12 - lonDeg / 15; // hours
-      const date = new Date(Date.UTC(2024, 2, 1) + localNoonUTC * 3600000);
+      let date;
+      if (flightState.sunDateOverride instanceof Date) {
+        date = flightState.sunDateOverride;
+      } else {
+        // Default: local solar noon
+        const lonDeg = flightState.lon / DEG2RAD;
+        const localNoonUTC = 12 - lonDeg / 15;
+        date = new Date(Date.UTC(2024, 2, 1) + localNoonUTC * 3600000);
+      }
       getSunDirectionECEF(date, sunDirection);
       aerialPerspective.sunDirection.copy(sunDirection);
       clouds.sunDirection.copy(sunDirection);

@@ -116,3 +116,11 @@ export const TERRAIN_GENERATOR_ARGS = Object.freeze({
 export const TERRAIN_HEIGHT_STRENGTH = 12.4 * (1 - TERRAIN_GENERATOR_ARGS.smoothLowerPlanes * 0.5);
 export const TERRAIN_RIVER_WIDTH = THREE.MathUtils.mapLinear(TERRAIN_GENERATOR_ARGS.riverWidth, 0, 1, 0.5, 0.44);
 export const TERRAIN_RIVER_FALLOFF = TERRAIN_GENERATOR_ARGS.riverFalloff * 0.3;
+
+// ── Live flight tracker ─────────────────────────────────────────────────────
+
+export const LIVE_FLIGHTS_ENABLED = false;
+
+// ── Golden Hour mode ────────────────────────────────────────────────────────
+
+export const GOLDEN_HOUR_ENABLED = true;

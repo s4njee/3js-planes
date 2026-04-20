@@ -202,6 +202,13 @@ export function createLightingRig({ scene, currentSetDef, getCurrentModelIndex, 
     });
   }
 
+  function suppressForExternalLighting() {
+    resetAllLights();
+    clearParticleGlow();
+    ambient.intensity = 0;
+    lastStaticSceneSignature = null;
+  }
+
   function getLightingStyle() {
     const def = currentSetDef();
     const modelIndex = getCurrentModelIndex();
@@ -641,5 +648,6 @@ export function createLightingRig({ scene, currentSetDef, getCurrentModelIndex, 
     updateBackgroundStars,
     updateParticleLighting,
     updateSceneLighting,
+    suppressForExternalLighting,
   };
 }

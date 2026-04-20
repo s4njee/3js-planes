@@ -51,6 +51,8 @@ import {
   TERRAIN_TILE_COUNT,
   TERRAIN_TILE_LENGTH,
   TERRAIN_SCROLL_SPEED,
+  LIVE_FLIGHTS_ENABLED,
+  GOLDEN_HOUR_ENABLED,
 } from './monolith/constants.js';
 
 import {
@@ -66,11 +68,17 @@ import {
   randomizeCloudSprite,
 } from './monolith/environment.js';
 
-import { createContrails } from './monolith/contrails.js';
 import { createHeatShimmerGroup } from './monolith/heat-shimmer.js';
 import CesiumTilesBackground from './monolith/CesiumTilesBackground.jsx';
 import { flightState } from './flight-store.js';
 import { shouldSuppressGlobalShortcuts } from './keyboard-shortcuts.js';
+import { createOpenSkyPoller } from './monolith/opensky.js';
+import { createLiveFlightsManager } from './monolith/live-flights.js';
+import { createCockpitCamera, COCKPIT_MODE_OFF } from './monolith/cockpit-camera.js';
+import { createFlightTrackerUI } from './monolith/flight-tracker-ui.js';
+import { createGoldenHourController } from './monolith/golden-hour.js';
+import { findGoldenHourDatetime } from './monolith/solar-ephemeris.js';
+import { decodeSceneURL, pushSceneURL, copySceneURL } from './monolith/scene-url.js';
 import {
   cartographicToScenePosition,
   CESIUM_TERRAIN_SCENE_SCALE,
@@ -133,13 +141,6 @@ function MonolithScene() {
     density: 0,
     ambientFactor: 1,
   });
-  const contrailsRef = useRef(null);
-  const contrailStateRef = useRef({
-    leftSpawnTimer: 0,
-    rightSpawnTimer: 0,
-    particleIndex: 0,
-    lastWorldYaw: 0,
-  });
   const appliedTeleportVersionRef = useRef(flightCommandState.teleportVersion);
   const terrainTilesRef = useRef([]);
   const flightControlRef = useRef(createInitialFlightControl());
@@ -149,6 +150,12 @@ function MonolithScene() {
     lastShakeOffset: new THREE.Vector3(),
   });
   const glitchTriggerTokenRef = useRef(0);
+  const liveFlightsRef = useRef(null);
+  const openSkyPollerRef = useRef(null);
+  const cockpitCameraRef = useRef(null);
+  const flightTrackerUIRef = useRef(null);
+  const liveFlightsEnabledRef = useRef(false);
+  const goldenHourRef = useRef(null);
   const [effectSnapshot, setEffectSnapshot] = useState(() => (
     createMonolithEffectSnapshot(guiParamsRef.current, stateRef.current, glitchTriggerTokenRef.current)
   ));
@@ -734,7 +741,7 @@ function MonolithScene() {
     camera.fov = BASE_CAMERA_FOV;
     camera.near = 0.1;
     camera.far = 2000;
-    camera.position.set(0, 5.0, 14);
+    camera.position.set(0, 5.0, 23);
     camera.updateProjectionMatrix();
 
     gl.setPixelRatio(window.devicePixelRatio);
@@ -922,10 +929,6 @@ function MonolithScene() {
       cloudFieldRef.current = cloudField;
     }
 
-    const contrails = createContrails();
-    contrailsRef.current = contrails;
-    contrailStateRef.current.lastWorldYaw = flightControlRef.current.worldYaw;
-    scene.add(contrails.group);
 
     if (OCEAN_ENABLED) {
       const ocean = createOcean();
@@ -996,6 +999,157 @@ function MonolithScene() {
         applyMonolithTransform();
       },
     });
+
+    // ── Golden Hour mode ───────────────────────────────────────────────────
+    let toggleGoldenHour = () => {};
+    let activateTimeOfDay = () => {};
+    let shareScene = async () => {};
+
+    if (GOLDEN_HOUR_ENABLED) {
+      goldenHourRef.current = createGoldenHourController({ scene });
+
+      activateTimeOfDay = (mode) => {
+        const gh = goldenHourRef.current;
+        const alreadyActive = gh.isEnabled() && gh.getTint() === mode;
+        gh.setEnabled(!alreadyActive);
+        if (gh.isEnabled()) {
+          const date = findGoldenHourDatetime(
+            flightState.lat,
+            flightState.lon,
+            { mode },
+          );
+          gh.setTint(mode === 'sunrise' ? 'sunrise' : 'sunset');
+          gh.setFixedDatetime(date);
+          flightState.sunDateOverride = date;
+          lightingRigRef.current?.suppressForExternalLighting();
+        } else {
+          flightState.sunDateOverride = null;
+        }
+        applySceneAppearance();
+      };
+
+      toggleGoldenHour = () => activateTimeOfDay('sunrise');
+
+      // Start in sunrise mode by default
+      activateTimeOfDay('sunrise');
+
+      shareScene = async () => {
+        const gh = goldenHourRef.current;
+        const modelIndex = stateRef.current.currentModelIndex;
+        const latDeg = flightState.lat * (180 / Math.PI);
+        const lonDeg = flightState.lon * (180 / Math.PI);
+        const headingDeg = flightState.heading * (180 / Math.PI);
+        const datetime = gh.isEnabled() && !gh.isRealTime()
+          ? gh.getFixedDatetime()
+          : new Date();
+
+        const params = {
+          plane: modelIndex,
+          lat: latDeg,
+          lon: lonDeg,
+          heading: headingDeg,
+          datetime,
+          goldenHour: gh.isEnabled(),
+        };
+
+        pushSceneURL(params);
+        const copied = await copySceneURL(params);
+        if (copied) {
+          uiRef.current?.updateLabel('URL copied to clipboard');
+        }
+      };
+
+      // Check for scene URL on load
+      const sceneFromURL = decodeSceneURL();
+      if (sceneFromURL) {
+        // Clear the hash so it doesn't re-trigger on HMR/refresh
+        window.history.replaceState(null, '', window.location.pathname);
+        const applySceneFromURL = () => {
+          const { lat, lon, heading, datetime, goldenHour, plane } = sceneFromURL;
+          flightCommandState.teleportLat = lat * (Math.PI / 180);
+          flightCommandState.teleportLon = lon * (Math.PI / 180);
+          flightCommandState.teleportHeading = heading * (Math.PI / 180);
+          flightCommandState.teleportVersion += 1;
+
+          if (goldenHour) {
+            goldenHourRef.current.setEnabled(true);
+            goldenHourRef.current.setFixedDatetime(datetime);
+          }
+
+          if (plane >= 0 && plane < currentModels().length && plane !== stateRef.current.currentModelIndex) {
+            loadModel(plane);
+          }
+        };
+        window.setTimeout(applySceneFromURL, 800);
+      }
+    }
+
+    // ── Live flight tracker ────────────────────────────────────────────────
+    let toggleLiveFlights = () => {};
+    let cycleCockpitCamera = () => {};
+    let selectNearestFlight = () => {};
+
+    if (LIVE_FLIGHTS_ENABLED) {
+      liveFlightsRef.current = createLiveFlightsManager({ scene, renderer: gl });
+      cockpitCameraRef.current = createCockpitCamera();
+      cockpitCameraRef.current.setLiveFlightsManager(liveFlightsRef.current);
+
+      const updateTrackerUI = () => {
+        if (!flightTrackerUIRef.current) return;
+        const status = cockpitCameraRef.current.getStatus();
+        flightTrackerUIRef.current.updateStatus({
+          enabled: liveFlightsEnabledRef.current,
+          ...status,
+        });
+      };
+
+      openSkyPollerRef.current = createOpenSkyPoller({
+        getCenter: () => ({
+          lat: flightState.lat * (180 / Math.PI),
+          lon: flightState.lon * (180 / Math.PI),
+        }),
+        onUpdate: (aircraft) => {
+          liveFlightsRef.current?.setAircraftData(aircraft);
+          updateTrackerUI();
+        },
+        onError: (err) => console.warn('[OpenSky]', err.message),
+      });
+
+      toggleLiveFlights = () => {
+        liveFlightsEnabledRef.current = !liveFlightsEnabledRef.current;
+        if (liveFlightsEnabledRef.current) {
+          openSkyPollerRef.current?.start();
+          liveFlightsRef.current.group.visible = true;
+        } else {
+          openSkyPollerRef.current?.stop();
+          liveFlightsRef.current.group.visible = false;
+          cockpitCameraRef.current.setMode(COCKPIT_MODE_OFF);
+          cockpitCameraRef.current.selectAircraft(null);
+        }
+        updateTrackerUI();
+      };
+
+      cycleCockpitCamera = () => {
+        if (!liveFlightsEnabledRef.current) return;
+        cockpitCameraRef.current.cycleMode();
+        updateTrackerUI();
+      };
+
+      selectNearestFlight = () => {
+        if (!liveFlightsEnabledRef.current) return;
+        cockpitCameraRef.current.selectNearest(
+          flightState.lat * (180 / Math.PI),
+          flightState.lon * (180 / Math.PI),
+        );
+        updateTrackerUI();
+      };
+
+      flightTrackerUIRef.current = createFlightTrackerUI({
+        onToggleTracker: toggleLiveFlights,
+        onCycleCamera: cycleCockpitCamera,
+        onSelectNearest: selectNearestFlight,
+      });
+    }
 
     // ── Progress bar ────────────────────────────────────────────────────────
     const progressContainer = document.createElement('div');
@@ -1078,6 +1232,38 @@ function MonolithScene() {
         return;
       }
 
+      // ── Live flight tracker hotkeys ─────────────────────────────────────
+      if (event.key === 't' || event.key === 'T') {
+        toggleLiveFlights();
+        return;
+      }
+
+      if (event.key === 'v' || event.key === 'V') {
+        cycleCockpitCamera();
+        return;
+      }
+
+      if (event.key === 'n' || event.key === 'N') {
+        selectNearestFlight();
+        return;
+      }
+
+      // ── Golden hour / share hotkeys ─────────────────────────────────────
+      if (event.key === 'h' || event.key === 'H') {
+        toggleGoldenHour();
+        return;
+      }
+
+      if (event.key === 'j' || event.key === 'J') {
+        activateTimeOfDay('sunset');
+        return;
+      }
+
+      if (event.key === 's' || event.key === 'S') {
+        shareScene();
+        return;
+      }
+
       if (handleSharedEffectHotkey(event)) {
         return;
       }
@@ -1122,8 +1308,16 @@ function MonolithScene() {
     syncEffectSnapshot();
     applySceneAppearance();
 
+    // Safety: force canvas visible if model load stalls
+    const safetyRevealTimer = window.setTimeout(() => {
+      if (gl.domElement.style.opacity === '0') {
+        gl.domElement.style.opacity = '1';
+      }
+    }, 5000);
+
     // ── Cleanup ─────────────────────────────────────────────────────────────
     return () => {
+      window.clearTimeout(safetyRevealTimer);
       window.removeEventListener('keydown', onKeyDown);
       window.removeEventListener('keyup', onKeyUp);
       gl.domElement.removeEventListener('pointerdown', onPointerDown);
@@ -1173,6 +1367,10 @@ function MonolithScene() {
       heatShimmerMaterialRef.current?.dispose();
       lightingRigRef.current?.dispose?.();
       lightingRigRef.current = null;
+      openSkyPollerRef.current?.stop();
+      liveFlightsRef.current?.dispose();
+      flightTrackerUIRef.current?.destroy();
+      goldenHourRef.current?.dispose();
       scene.environment = null;
       scene.background = null;
       dracoLoader.dispose();
@@ -1207,29 +1405,33 @@ function MonolithScene() {
     applyPendingTeleport();
 
     // ── Camera follow ───────────────────────────────────────────────────
-    const planeGeoAnchor = monolithRef.current?.userData.monolithGeoAnchor;
-    const planePos = planeGeoAnchor instanceof THREE.Vector3
-      ? planeGeoAnchor.clone()
-      : (monolithRef.current?.position ?? new THREE.Vector3());
-    if (monolithRef.current) {
-      monolithRef.current.localToWorld(planePos);
-    }
-    const camRadius = 14;
-    const camBaseY = 5.0;
-    const targetCamX = planePos.x;
-    const targetCamZ = planePos.z + camRadius;
-    const targetCamY = planePos.y + camBaseY;
-    camera.position.x = THREE.MathUtils.lerp(camera.position.x, targetCamX, delta * 6);
-    camera.position.z = THREE.MathUtils.lerp(camera.position.z, targetCamZ, delta * 6);
-    camera.position.y = THREE.MathUtils.lerp(camera.position.y, targetCamY, delta * 4);
+    const cockpitActive = cockpitCameraRef.current?.getMode() !== COCKPIT_MODE_OFF;
 
-    const targetLookY = planePos.y + 2.5;
-    if (controlsRef.current) {
-      controlsRef.current.target.x = THREE.MathUtils.lerp(controlsRef.current.target.x, planePos.x, delta * 6);
-      controlsRef.current.target.z = THREE.MathUtils.lerp(controlsRef.current.target.z, planePos.z, delta * 6);
-      controlsRef.current.target.y = THREE.MathUtils.lerp(controlsRef.current.target.y, targetLookY, delta * 4);
+    if (!cockpitActive) {
+      const planeGeoAnchor = monolithRef.current?.userData.monolithGeoAnchor;
+      const planePos = planeGeoAnchor instanceof THREE.Vector3
+        ? planeGeoAnchor.clone()
+        : (monolithRef.current?.position ?? new THREE.Vector3());
+      if (monolithRef.current) {
+        monolithRef.current.localToWorld(planePos);
+      }
+      const camRadius = 23;
+      const camBaseY = 3.0;
+      const targetCamX = planePos.x;
+      const targetCamZ = planePos.z + camRadius;
+      const targetCamY = planePos.y + camBaseY;
+      camera.position.x = THREE.MathUtils.lerp(camera.position.x, targetCamX, delta * 6);
+      camera.position.z = THREE.MathUtils.lerp(camera.position.z, targetCamZ, delta * 6);
+      camera.position.y = THREE.MathUtils.lerp(camera.position.y, targetCamY, delta * 4);
+
+      const targetLookY = planePos.y + 1.0;
+      if (controlsRef.current) {
+        controlsRef.current.target.x = THREE.MathUtils.lerp(controlsRef.current.target.x, planePos.x, delta * 6);
+        controlsRef.current.target.z = THREE.MathUtils.lerp(controlsRef.current.target.z, planePos.z, delta * 6);
+        controlsRef.current.target.y = THREE.MathUtils.lerp(controlsRef.current.target.y, targetLookY, delta * 4);
+      }
+      controlsRef.current?.update();
     }
-    controlsRef.current?.update();
     mixerRef.current?.update(delta);
     materialManagerRef.current?.updateXrayAnimation(elapsed);
     lightingRigRef.current?.updateBackgroundStars({
@@ -1296,7 +1498,7 @@ function MonolithScene() {
     camera.updateProjectionMatrix();
 
     // ── Camera shake ────────────────────────────────────────────────────
-    if (boostVisualState.intensity > 0.001) {
+    if (!cockpitActive && boostVisualState.intensity > 0.001) {
       boostShakeOffset.set(
         (Math.sin(elapsed * 23.0) + Math.sin(elapsed * 41.0 + 0.8)) * BOOST_SHAKE_X_AMPLITUDE * boostVisualState.intensity,
         (Math.sin(elapsed * 31.0 + 1.2) + Math.sin(elapsed * 53.0)) * BOOST_SHAKE_Y_AMPLITUDE * boostVisualState.intensity,
@@ -1364,76 +1566,6 @@ function MonolithScene() {
     } else {
       cloudStateRef.current.density = THREE.MathUtils.lerp(cloudStateRef.current.density, 0, delta * 2.2);
       cloudStateRef.current.ambientFactor = THREE.MathUtils.lerp(cloudStateRef.current.ambientFactor, 1, delta * 2.2);
-    }
-
-    // ── Contrails ───────────────────────────────────────────────────────
-    if (contrailsRef.current) {
-      const contrailSpeed = CLOUD_SCROLL_SPEED * 1.5 * (
-        sr71BoostMotionScale ?? (1 + boostVisualState.intensity * 2.5)
-      );
-      const deltaYaw = flightControl.worldYaw - flightControl.lastWorldYaw;
-      const yAxis = new THREE.Vector3(0, 1, 0);
-
-      contrailsRef.current.particles.forEach((p) => {
-        if (p.life > 0) {
-          p.life -= delta;
-          if (p.life <= 0) {
-            p.sprite.visible = false;
-          } else {
-            p.sprite.position.applyAxisAngle(yAxis, -deltaYaw);
-            p.sprite.position.z += contrailSpeed * delta;
-            
-            const lifeProgress = p.life / p.maxLife;
-            p.sprite.scale.setScalar(0.8 + (1 - lifeProgress) * 4.5);
-            p.sprite.material.opacity = Math.pow(lifeProgress, 1.2) * 0.45;
-          }
-        }
-      });
-
-      if (boostVisualState.intensity > 0.01) {
-        contrailStateRef.current.leftSpawnTimer -= delta;
-        contrailStateRef.current.rightSpawnTimer -= delta;
-
-        const spawnParticle = (offsetZ) => {
-          const index = contrailStateRef.current.particleIndex;
-          const p = contrailsRef.current.particles[index];
-          p.life = p.maxLife = 1.0 + Math.random() * 0.6;
-          p.sprite.visible = true;
-
-          if (monolithRef.current) {
-            // Compute true wingtips based on model's physical bounding box
-            if (!monolithRef.current.userData.contrailOffsets) {
-              const box = new THREE.Box3().setFromObject(monolithRef.current);
-              // In world space (due to -90 base Y rot), X is wingspan, Z is length.
-              const wingspan = box.max.x - box.min.x;
-              const length = box.max.z - box.min.z;
-              monolithRef.current.userData.contrailOffsets = {
-                halfSpan: wingspan * 0.45, // 90% of half-span to be right at the tips
-                sweepBack: length * 0.25, // trailing edge estimation
-              };
-            }
-            const offsets = monolithRef.current.userData.contrailOffsets;
-            const sign = offsetZ > 0 ? 1 : -1;
-            // Native local X maps to world +Z (tail), Native Z is wing axis.
-            const wingPos = new THREE.Vector3(offsets.sweepBack, -0.1, offsets.halfSpan * sign); 
-            
-            monolithRef.current.localToWorld(wingPos);
-            p.sprite.position.copy(wingPos);
-          }
-          
-          contrailStateRef.current.particleIndex = (index + 1) % 200;
-        };
-
-        const spawnRate = 0.016;
-        while (contrailStateRef.current.leftSpawnTimer <= 0) {
-          spawnParticle(3.8);
-          contrailStateRef.current.leftSpawnTimer += spawnRate;
-        }
-        while (contrailStateRef.current.rightSpawnTimer <= 0) {
-          spawnParticle(-3.8);
-          contrailStateRef.current.rightSpawnTimer += spawnRate;
-        }
-      }
     }
 
     // ── Terrain scrolling ───────────────────────────────────────────────
@@ -1512,17 +1644,47 @@ function MonolithScene() {
       guiParamsRef.current.saturation = 1;
     }
 
+    // ── Golden Hour lighting ────────────────────────────────────────────
+    if (goldenHourRef.current?.isEnabled()) {
+      const sun = goldenHourRef.current.update(
+        flightState.lat,
+        flightState.lon,
+        monolithRef.current,
+      );
+
+      // Drive sky dome sun position from real ephemeris
+      if (sun && skyDomeRef.current) {
+        const [sx, sy, sz] = sun.sunDirection;
+        // The sky dome shader expects sunDir in its local rotated space.
+        // We pass the raw direction and skip the yaw rotation for golden hour
+        // since the sun position is already geographically correct.
+        skyDomeRef.current.material.uniforms.sunDirection.value.set(sx, sy, sz);
+      }
+    }
+
     // ── Lighting ────────────────────────────────────────────────────────
-    if (stateRef.current.lightingMode === LIGHTING_MODE_SCENE) {
-      lightingRigRef.current?.updateSceneLighting({
-        forceRefresh: effectSnapshot.cinematicEnabled && effectSnapshot.bloomEnabled,
-      });
-    } else if (stateRef.current.lightingMode === LIGHTING_MODE_PARTICLES) {
-      lightingRigRef.current?.updateParticleLighting();
+    if (!goldenHourRef.current?.isEnabled()) {
+      if (stateRef.current.lightingMode === LIGHTING_MODE_SCENE) {
+        lightingRigRef.current?.updateSceneLighting({
+          forceRefresh: effectSnapshot.cinematicEnabled && effectSnapshot.bloomEnabled,
+        });
+      } else if (stateRef.current.lightingMode === LIGHTING_MODE_PARTICLES) {
+        lightingRigRef.current?.updateParticleLighting();
+      }
     }
 
     if (effectSnapshot.cinematicEnabled && effectSnapshot.bloomEnabled) {
       lightingRigRef.current?.animateBloomRing();
+    }
+
+    // ── Live flights ───────────────────────────────────────────────────
+    if (LIVE_FLIGHTS_ENABLED && liveFlightsEnabledRef.current && liveFlightsRef.current) {
+      liveFlightsRef.current.update(delta);
+    }
+
+    // ── Cockpit camera override ─────────────────────────────────────────
+    if (LIVE_FLIGHTS_ENABLED && cockpitCameraRef.current) {
+      cockpitCameraRef.current.update(camera, controlsRef.current, delta);
     }
 
     // ── Sync last yaw for next frame delta ──────────────────────────────

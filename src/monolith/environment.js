@@ -31,6 +31,7 @@ export function createSkyDome() {
     uniforms: {
       time: { value: 0 },
       yaw: { value: 0 },
+      sunDirection: { value: new THREE.Vector3(-0.55, 0.06, -1.0).normalize() },
     },
     vertexShader: `
       varying vec3 vDirection;
@@ -43,6 +44,7 @@ export function createSkyDome() {
     fragmentShader: `
       uniform float time;
       uniform float yaw;
+      uniform vec3 sunDirection;
       varying vec3 vDirection;
 
       float hash(vec3 p) {
@@ -129,7 +131,7 @@ export function createSkyDome() {
         base += vec3(0.12, 0.16, 0.32) * highClouds * 0.25;
 
         // ── Sun disc + glow ─────────────────────────────────────────
-        vec3 sunDir = normalize(vec3(-0.55, 0.06, -1.0));
+        vec3 sunDir = normalize(sunDirection);
         float sunDot = dot(dir, sunDir);
         float sunAngle = max(sunDot, 0.0);
 
