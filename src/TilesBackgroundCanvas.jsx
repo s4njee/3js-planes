@@ -358,6 +358,27 @@ export default function TilesBackgroundCanvas() {
       deltaTime = (time - prevTime) / 1000;
       prevTime = time;
       if (deltaTime > 0 && deltaTime < 1) {
+        // Auto-steer toward target if set
+        if (flightState.targetLat != null && flightState.targetLon != null) {
+          const dLon = flightState.targetLon - flightState.lon;
+          const dLat = flightState.targetLat - flightState.lat;
+          const distSq = dLon * dLon + dLat * dLat;
+          const arrivalThreshold = 0.0001; // ~11m in radians
+          if (distSq < arrivalThreshold * arrivalThreshold) {
+            // Arrived — clear target
+            flightState.targetLat = null;
+            flightState.targetLon = null;
+          } else {
+            const desiredHeading = Math.atan2(dLon, dLat);
+            let diff = desiredHeading - flightState.heading;
+            // Normalize to [-PI, PI]
+            while (diff > Math.PI) diff -= 2 * Math.PI;
+            while (diff < -Math.PI) diff += 2 * Math.PI;
+            const steerSpeed = 1.2 * deltaTime;
+            flightState.heading += Math.max(-steerSpeed, Math.min(steerSpeed, diff));
+          }
+        }
+
         if (flightState.left) flightState.heading -= TURN_SPEED * deltaTime;
         if (flightState.right) flightState.heading += TURN_SPEED * deltaTime;
         const speed = getFlightSpeed() * (flightState.boost ? 3 : 1) * deltaTime;
