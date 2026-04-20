@@ -181,12 +181,15 @@ export default function TilesBackgroundCanvas() {
     const updateSunDirection = () => {
       let date;
       if (flightState.sunDateOverride instanceof Date) {
+        // Golden hour mode — use the override but recompute for current position
+        // so the sun stays at the same visual elevation everywhere.
         date = flightState.sunDateOverride;
       } else {
-        // Default: local solar noon
+        // Default: always local solar noon at the current position.
+        // This keeps the sun high and the scene well-lit everywhere.
         const lonDeg = flightState.lon / DEG2RAD;
         const localNoonUTC = 12 - lonDeg / 15;
-        date = new Date(Date.UTC(2024, 2, 1) + localNoonUTC * 3600000);
+        date = new Date(Date.UTC(2024, 5, 21, Math.round(localNoonUTC)));
       }
       getSunDirectionECEF(date, sunDirection);
       aerialPerspective.sunDirection.copy(sunDirection);

@@ -1411,9 +1411,16 @@ function MonolithScene() {
     if (flightState.cityRevealVersion !== appliedCityRevealVersionRef.current) {
       appliedCityRevealVersionRef.current = flightState.cityRevealVersion;
       if (flightState.cityRevealLabel) {
-        // Extract short city name from the full Nominatim display_name
         const shortName = flightState.cityRevealLabel.split(',')[0].trim();
         uiRef.current?.showCityReveal(shortName);
+      }
+      // Recompute golden hour for the new position so lighting stays consistent
+      const gh = goldenHourRef.current;
+      if (gh?.isEnabled()) {
+        const mode = gh.getTint();
+        const date = findGoldenHourDatetime(flightState.lat, flightState.lon, { mode });
+        gh.setFixedDatetime(date);
+        flightState.sunDateOverride = date;
       }
     }
 
