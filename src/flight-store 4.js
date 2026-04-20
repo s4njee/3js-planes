@@ -1,7 +1,5 @@
 // Shared flight state — written by the scene components, read by Minimap.
 // Angles are in radians, altitude in metres.
-// Start at Haneda Airport so the first refresh reads as Tokyo but not a dense
-// city-center spawn.
 export const START_LAT_RAD = 35.5494 * (Math.PI / 180);
 export const START_LON_RAD = 139.7798 * (Math.PI / 180);
 
@@ -17,13 +15,9 @@ export const flightState = {
   down: false,
   targetLat: null,
   targetLon: null,
-  /** When set, overrides the Cesium sky sun to this Date instead of local noon. */
   sunDateOverride: null,
 };
 
-// Shared one-shot teleport command. The background scene requests a city
-// change here, and the Monolith scene consumes it to move the actual plane
-// origin so the shared flight state does not get snapped back on the next frame.
 export const flightCommandState = {
   teleportVersion: 0,
   teleportLat: START_LAT_RAD,
