@@ -18,7 +18,7 @@ import {
 } from '@takram/three-clouds';
 import { AerialPerspectiveEffect, PrecomputedTexturesGenerator, getSunDirectionECEF } from '@takram/three-atmosphere';
 import { STBNLoader, DEFAULT_STBN_URL } from '@takram/three-geospatial';
-import { DitheringEffect, LensFlareEffect } from '@takram/three-geospatial-effects';
+import { LensFlareEffect } from '@takram/three-geospatial-effects';
 import { resolveAssetUrl } from './monolith/asset-url.js';
 import { flightState, requestFlightTeleport } from './flight-store.js';
 import CitySearch from './CitySearch.jsx';
@@ -78,6 +78,80 @@ export default function TilesBackgroundCanvas() {
     tiles.setCamera(camera);
     tiles.setResolutionFromRenderer(camera, renderer);
     scene.add(tiles.group);
+
+    // aircraft shadow on terrain
+    const SHADOW_RADIUS = 30;
+    const SHADOW_FADE_FULL_M = 100;
+    const SHADOW_FADE_GONE_M = 1500;
+    const SHADOW_BASE_OPACITY = 0.55;
+
+    const shadowCanvas = document.createElement('canvas');
+    shadowCanvas.width = shadowCanvas.height = 256;
+    const shadowCtx = shadowCanvas.getContext('2d');
+    const shadowGrad = shadowCtx.createRadialGradient(128, 128, 0, 128, 128, 128);
+    shadowGrad.addColorStop(0, 'rgba(0,0,0,1)');
+    shadowGrad.addColorStop(0.5, 'rgba(0,0,0,0.7)');
+    shadowGrad.addColorStop(1, 'rgba(0,0,0,0)');
+    shadowCtx.fillStyle = shadowGrad;
+    shadowCtx.fillRect(0, 0, 256, 256);
+    const shadowTexture = new THREE.CanvasTexture(shadowCanvas);
+
+    const shadowMaterial = new THREE.MeshBasicMaterial({
+      map: shadowTexture,
+      transparent: true,
+      depthWrite: false,
+      color: 0x000000,
+    });
+    const shadowGeometry = new THREE.PlaneGeometry(SHADOW_RADIUS * 2, SHADOW_RADIUS * 2);
+    const shadowMesh = new THREE.Mesh(shadowGeometry, shadowMaterial);
+    shadowMesh.frustumCulled = false;
+    shadowMesh.renderOrder = 1;
+    shadowMesh.visible = false;
+    scene.add(shadowMesh);
+
+    const shadowRaycaster = new THREE.Raycaster();
+    const shadowSurfaceMatrix = new THREE.Matrix4();
+    const shadowSurfacePos = new THREE.Vector3();
+    const shadowDownDir = new THREE.Vector3();
+    const shadowUpDir = new THREE.Vector3();
+    const shadowPlaneNormal = new THREE.Vector3(0, 0, 1);
+
+    const updateShadow = () => {
+      tiles.ellipsoid.getObjectFrame(
+        flightState.lat, flightState.lon, 0,
+        0, 0, 0, shadowSurfaceMatrix, CAMERA_FRAME,
+      );
+      shadowSurfacePos.setFromMatrixPosition(shadowSurfaceMatrix);
+      shadowDownDir.subVectors(shadowSurfacePos, camera.position).normalize();
+
+      shadowRaycaster.set(camera.position, shadowDownDir);
+      shadowRaycaster.near = 0;
+      shadowRaycaster.far = SHADOW_FADE_GONE_M + 500;
+      const hits = shadowRaycaster.intersectObject(tiles.group, true);
+
+      if (!hits.length) {
+        shadowMesh.visible = false;
+        return;
+      }
+
+      const agl = hits[0].distance;
+      let fade;
+      if (agl <= SHADOW_FADE_FULL_M) fade = 1;
+      else if (agl >= SHADOW_FADE_GONE_M) fade = 0;
+      else fade = 1 - (agl - SHADOW_FADE_FULL_M) / (SHADOW_FADE_GONE_M - SHADOW_FADE_FULL_M);
+
+      if (fade <= 0.001) {
+        shadowMesh.visible = false;
+        return;
+      }
+
+      shadowUpDir.copy(shadowDownDir).negate();
+      // nudge slightly above terrain to avoid z-fighting
+      shadowMesh.position.copy(hits[0].point).addScaledVector(shadowUpDir, 0.5);
+      shadowMesh.quaternion.setFromUnitVectors(shadowPlaneNormal, shadowUpDir);
+      shadowMaterial.opacity = SHADOW_BASE_OPACITY * fade;
+      shadowMesh.visible = true;
+    };
 
     // flightState is module-shared (see flight-store.js) so the minimap and
     // search widget can share a single location without prop drilling.
@@ -225,7 +299,6 @@ export default function TilesBackgroundCanvas() {
       new EffectPassAdapter(new EffectPass(camera, clouds, aerialPerspective)),
       new EffectPassAdapter(new EffectPass(camera, new LensFlareEffect())),
       new EffectPassAdapter(new EffectPass(camera, new SMAAEffect())),
-      new EffectPassAdapter(new EffectPass(camera, new DitheringEffect())),
     ]);
 
     // async init: precomputed textures + cloud textures
@@ -291,6 +364,7 @@ export default function TilesBackgroundCanvas() {
         updateSunDirection();
       }
       tiles.update();
+      updateShadow();
       renderer.render(scene, camera);
     };
     animId = requestAnimationFrame(animate);
@@ -303,6 +377,9 @@ export default function TilesBackgroundCanvas() {
       gui.destroy();
       tiles.dispose();
       dracoLoader.dispose();
+      shadowGeometry.dispose();
+      shadowMaterial.dispose();
+      shadowTexture.dispose();
       renderer.dispose();
     };
   }, []);

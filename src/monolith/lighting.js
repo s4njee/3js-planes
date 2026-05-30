@@ -56,67 +56,6 @@ export function createLightingRig({ scene, currentSetDef, getCurrentModelIndex, 
   });
   const particles = new THREE.Points(particleGeo, particleMat);
   particles.visible = false;
-  scene.add(particles);
-
-  const backgroundStarConfigs = [
-    { count: 360, radiusMin: 44, radiusMax: 58, size: 0.7, opacity: 0.95 },
-    { count: 840, radiusMin: 60, radiusMax: 76, size: 0.48, opacity: 0.84 },
-    { count: 1800, radiusMin: 80, radiusMax: 96, size: 0.32, opacity: 0.74 },
-  ];
-  const backgroundStarColor = new THREE.Color();
-  const backgroundStars = new THREE.Group();
-  const backgroundStarGeometries = [];
-  const backgroundStarMaterials = [];
-
-  backgroundStarConfigs.forEach((config, layerIndex) => {
-    const backgroundStarGeo = new THREE.BufferGeometry();
-    const backgroundStarPositions = new Float32Array(config.count * 3);
-    const backgroundStarColors = new Float32Array(config.count * 3);
-
-    for (let i = 0; i < config.count; i++) {
-      const theta = Math.random() * Math.PI * 2;
-      const phi = Math.acos(THREE.MathUtils.lerp(0.05, 1.0, Math.random()));
-      const radius = THREE.MathUtils.lerp(config.radiusMin, config.radiusMax, Math.random());
-      const sinPhi = Math.sin(phi);
-
-      backgroundStarPositions[i * 3] = Math.cos(theta) * sinPhi * radius;
-      backgroundStarPositions[i * 3 + 1] = Math.cos(phi) * radius;
-      backgroundStarPositions[i * 3 + 2] = Math.sin(theta) * sinPhi * radius;
-
-      const lightness = THREE.MathUtils.lerp(0.78, 1.0, Math.random());
-      const hue = THREE.MathUtils.lerp(0.55, 0.66, Math.random());
-      const saturation = THREE.MathUtils.lerp(0.05, 0.18, Math.random());
-      backgroundStarColor.setHSL(hue, saturation, lightness);
-      backgroundStarColors[i * 3] = backgroundStarColor.r;
-      backgroundStarColors[i * 3 + 1] = backgroundStarColor.g;
-      backgroundStarColors[i * 3 + 2] = backgroundStarColor.b;
-    }
-
-    backgroundStarGeo.setAttribute('position', new THREE.BufferAttribute(backgroundStarPositions, 3));
-    backgroundStarGeo.setAttribute('color', new THREE.BufferAttribute(backgroundStarColors, 3));
-
-    const backgroundStarsMat = new THREE.PointsMaterial({
-      size: config.size,
-      sizeAttenuation: true,
-      map: particleTexture,
-      transparent: true,
-      opacity: config.opacity,
-      alphaTest: 0.01,
-      depthWrite: false,
-      blending: THREE.NormalBlending,
-      vertexColors: true,
-    });
-
-    const backgroundStarLayer = new THREE.Points(backgroundStarGeo, backgroundStarsMat);
-    backgroundStarLayer.frustumCulled = false;
-    backgroundStarLayer.renderOrder = -50 + layerIndex;
-    backgroundStars.add(backgroundStarLayer);
-    backgroundStarGeometries.push(backgroundStarGeo);
-    backgroundStarMaterials.push(backgroundStarsMat);
-  });
-
-  backgroundStars.frustumCulled = false;
-  scene.add(backgroundStars);
 
   const glowLights = [];
   const glowCount = 6;
@@ -605,14 +544,9 @@ export function createLightingRig({ scene, currentSetDef, getCurrentModelIndex, 
     streetLight2.intensity = 1.5 * getPulse(p2);
   }
 
-  function updateBackgroundStars({ cameraPosition }) {
-    backgroundStars.position.copy(cameraPosition);
-  }
-
   function dispose() {
     scene.remove(ambient);
     scene.remove(particles);
-    scene.remove(backgroundStars);
     scene.remove(ringMesh);
     scene.remove(ringLight);
     scene.remove(ringLight2);
@@ -632,8 +566,6 @@ export function createLightingRig({ scene, currentSetDef, getCurrentModelIndex, 
 
     particleGeo.dispose();
     particleMat.dispose();
-    backgroundStarGeometries.forEach((geometry) => geometry.dispose());
-    backgroundStarMaterials.forEach((material) => material.dispose());
     particleTexture.dispose();
     ringGeometry.dispose();
     ringMaterial.dispose();
@@ -642,10 +574,8 @@ export function createLightingRig({ scene, currentSetDef, getCurrentModelIndex, 
   return {
     animateBloomRing,
     clearParticleGlow,
-    backgroundStars,
     dispose,
     particles,
-    updateBackgroundStars,
     updateParticleLighting,
     updateSceneLighting,
     suppressForExternalLighting,

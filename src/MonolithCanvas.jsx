@@ -1434,9 +1434,6 @@ function MonolithScene() {
     }
     mixerRef.current?.update(delta);
     materialManagerRef.current?.updateXrayAnimation(elapsed);
-    lightingRigRef.current?.updateBackgroundStars({
-      cameraPosition: camera.position,
-    });
 
     // ── Boost visual intensity ──────────────────────────────────────────
     boostVisualState.intensity = THREE.MathUtils.lerp(
