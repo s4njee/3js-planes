@@ -778,6 +778,9 @@ function MonolithScene() {
     const clearTouchSteering = () => {
       flightControlRef.current.touchTurnStrength = 0;
       flightControlRef.current.touchElevationStrength = 0;
+      // Let TilesBackgroundCanvas know steering stopped so it can idle-skip again.
+      flightState.left = false;
+      flightState.right = false;
     };
 
     const cancelLongPress = () => {
@@ -853,8 +856,13 @@ function MonolithScene() {
       // arrow key: full strength, no analog ramp. Left drag (dx < 0) →
       // turn left (ArrowLeft). Up drag (dy < 0) → ascend (ArrowUp).
       const step = (v) => (Math.abs(v) <= TOUCH_DRAG_DEAD_ZONE_PX ? 0 : Math.sign(v));
-      flightControlRef.current.touchTurnStrength = -step(dx);
+      const turnStrength = -step(dx);
+      flightControlRef.current.touchTurnStrength = turnStrength;
       flightControlRef.current.touchElevationStrength = -step(dy);
+      // Mirror into flightState so TilesBackgroundCanvas exits idle-skip and
+      // re-renders the tiles every frame while the drag is active.
+      flightState.left = turnStrength > 0;
+      flightState.right = turnStrength < 0;
     };
 
     const onPointerEnd = (event) => {
