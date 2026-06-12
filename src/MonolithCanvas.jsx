@@ -22,10 +22,9 @@ import {
   LIGHTING_MODE_SCENE,
   LIGHTING_MODE_LABELS,
   ANIMATION_SPEED_BOOST_MULTIPLIER,
-  TOUCH_LONG_PRESS_DELAY_MS,
   TOUCH_TAP_MAX_MOVEMENT_PX,
-  TOUCH_DOUBLE_TAP_MAX_DELAY_MS,
-  TOUCH_DOUBLE_TAP_MAX_DISTANCE_PX,
+  TOUCH_DRAG_DEAD_ZONE_PX,
+  TOUCH_DRAG_FULL_PX,
   BASE_CAMERA_FOV,
   BOOST_CAMERA_FOV,
   BOOST_FOV_LERP_SPEED,
@@ -760,65 +759,25 @@ function MonolithScene() {
     controlsRef.current = controls;
 
     // ── Touch input state ─────────────────────────────────────────────────
+    // Tap = toggle boost. Single-finger drag = steer (horizontal: turn,
+    // vertical: altitude). Multi-touch cancels both gestures.
     const touchState = {
       activePointers: new Map(),
-      longPressTimerId: null,
-      longPressPointerId: null,
-      longPressActive: false,
-      lastTapTime: 0,
-      lastTapX: 0,
-      lastTapY: 0,
-      lastTapClearTimerId: null,
     };
 
     const isTouchDevice = () => (
       window.matchMedia?.('(pointer: coarse)')?.matches || navigator.maxTouchPoints > 0
     );
 
-    const clearLongPressTimer = () => {
-      if (touchState.longPressTimerId !== null) {
-        window.clearTimeout(touchState.longPressTimerId);
-        touchState.longPressTimerId = null;
-      }
-      touchState.longPressPointerId = null;
-    };
-
-    const clearLastTap = () => {
-      if (touchState.lastTapClearTimerId !== null) {
-        window.clearTimeout(touchState.lastTapClearTimerId);
-        touchState.lastTapClearTimerId = null;
-      }
-      touchState.lastTapTime = 0;
-    };
-
-    const stopTouchBoost = () => {
-      if (!touchState.longPressActive) return;
-      touchState.longPressActive = false;
-      setAnimationSpeedBoost(false);
-    };
-
-    const startLongPressTimer = (pointerId) => {
-      clearLongPressTimer();
-      touchState.longPressPointerId = pointerId;
-      touchState.longPressTimerId = window.setTimeout(() => {
-        const pointer = touchState.activePointers.get(pointerId);
-        if (!pointer || pointer.cancelled || pointer.moved || touchState.activePointers.size !== 1) {
-          return;
-        }
-
-        touchState.longPressTimerId = null;
-        touchState.longPressPointerId = null;
-        touchState.longPressActive = true;
-        clearLastTap();
-        setAnimationSpeedBoost(true);
-      }, TOUCH_LONG_PRESS_DELAY_MS);
+    const clearTouchSteering = () => {
+      flightControlRef.current.touchTurnStrength = 0;
+      flightControlRef.current.touchElevationStrength = 0;
     };
 
     // ── Pointer event handlers ────────────────────────────────────────────
     const onPointerDown = (event) => {
       if (!isTouchDevice() || event.pointerType !== 'touch') return;
 
-      const pointerCountBefore = touchState.activePointers.size;
       touchState.activePointers.set(event.pointerId, {
         startX: event.clientX,
         startY: event.clientY,
@@ -828,37 +787,44 @@ function MonolithScene() {
         cancelled: false,
       });
 
-      if (pointerCountBefore === 0) {
-        startLongPressTimer(event.pointerId);
-        return;
+      // Multi-touch: cancel steering and any ongoing single-finger gesture.
+      if (touchState.activePointers.size > 1) {
+        clearTouchSteering();
+        touchState.activePointers.forEach((p) => { p.cancelled = true; });
       }
-
-      clearLongPressTimer();
-      stopTouchBoost();
-      clearLastTap();
-      touchState.activePointers.forEach((pointer) => {
-        pointer.cancelled = true;
-      });
     };
 
     const onPointerMove = (event) => {
       if (!isTouchDevice() || event.pointerType !== 'touch') return;
+      if (touchState.activePointers.size !== 1) return;
 
       const pointer = touchState.activePointers.get(event.pointerId);
-      if (!pointer) return;
+      if (!pointer || pointer.cancelled) return;
 
       pointer.lastX = event.clientX;
       pointer.lastY = event.clientY;
 
-      const moveDistance = Math.hypot(
-        pointer.lastX - pointer.startX,
-        pointer.lastY - pointer.startY,
-      );
+      const dx = pointer.lastX - pointer.startX;
+      const dy = pointer.lastY - pointer.startY;
 
-      if (moveDistance > TOUCH_TAP_MAX_MOVEMENT_PX) {
+      if (Math.abs(dx) > TOUCH_TAP_MAX_MOVEMENT_PX || Math.abs(dy) > TOUCH_TAP_MAX_MOVEMENT_PX) {
         pointer.moved = true;
-        clearLongPressTimer();
       }
+
+      // Compute independent per-axis steering strength, each with its own
+      // dead zone and ramp. Left drag (dx < 0) → positive turn (left).
+      // Up drag (dy < 0) → positive elevation (ascend).
+      const ramp = (v) => {
+        const abs = Math.abs(v);
+        if (abs <= TOUCH_DRAG_DEAD_ZONE_PX) return 0;
+        return Math.sign(v) * Math.min(
+          (abs - TOUCH_DRAG_DEAD_ZONE_PX) / (TOUCH_DRAG_FULL_PX - TOUCH_DRAG_DEAD_ZONE_PX),
+          1,
+        );
+      };
+
+      flightControlRef.current.touchTurnStrength = -ramp(dx);
+      flightControlRef.current.touchElevationStrength = -ramp(dy);
     };
 
     const onPointerEnd = (event) => {
@@ -869,45 +835,22 @@ function MonolithScene() {
 
       touchState.activePointers.delete(event.pointerId);
 
-      if (touchState.longPressPointerId === event.pointerId) {
-        clearLongPressTimer();
+      // Always clear steering when the finger lifts; the next pointerdown
+      // establishes a fresh drag origin.
+      if (touchState.activePointers.size === 0) {
+        clearTouchSteering();
       }
 
-      if (touchState.longPressActive) {
-        if (touchState.activePointers.size === 0) {
-          stopTouchBoost();
-        }
-        return;
-      }
-
-      if (pointer.cancelled || pointer.moved || touchState.activePointers.size !== 0) {
-        return;
-      }
-
-      const now = window.performance.now();
-      const tapDistance = Math.hypot(
-        pointer.lastX - touchState.lastTapX,
-        pointer.lastY - touchState.lastTapY,
-      );
-
+      // Tap (no significant movement, not cancelled, last finger up):
+      // toggle boost immediately.
       if (
-        touchState.lastTapTime > 0
-        && (now - touchState.lastTapTime) <= TOUCH_DOUBLE_TAP_MAX_DELAY_MS
-        && tapDistance <= TOUCH_DOUBLE_TAP_MAX_DISTANCE_PX
+        !pointer.cancelled
+        && !pointer.moved
+        && touchState.activePointers.size === 0
+        && supportsAnimationSpeedBoost()
       ) {
-        clearLastTap();
-        loadNextModel(1);
-        return;
+        setAnimationSpeedBoost(!stateRef.current.animationSpeedBoostEnabled);
       }
-
-      clearLastTap();
-      touchState.lastTapX = pointer.lastX;
-      touchState.lastTapY = pointer.lastY;
-      touchState.lastTapTime = now;
-      touchState.lastTapClearTimerId = window.setTimeout(() => {
-        touchState.lastTapClearTimerId = null;
-        touchState.lastTapTime = 0;
-      }, TOUCH_DOUBLE_TAP_MAX_DELAY_MS);
     };
 
     // ── Scene construction ────────────────────────────────────────────────
@@ -1266,8 +1209,10 @@ function MonolithScene() {
 
     // ── Flight controls ─────────────────────────────────────────────────
     const flightControl = flightControlRef.current;
-    const elevationDirection = Number(flightControl.ascendPressed) - Number(flightControl.descendPressed);
-    if (elevationDirection !== 0) {
+    // Keyboard booleans take priority; fall back to touch drag strength.
+    const keyElevation = Number(flightControl.ascendPressed) - Number(flightControl.descendPressed);
+    const elevationDirection = keyElevation !== 0 ? keyElevation : flightControl.touchElevationStrength;
+    if (Math.abs(elevationDirection) > 0.01) {
       flightControl.targetElevationOffset = THREE.MathUtils.clamp(
         flightControl.targetElevationOffset + (elevationDirection * ELEVATION_SPEED * delta),
         ELEVATION_MIN_OFFSET,
@@ -1286,7 +1231,8 @@ function MonolithScene() {
     );
 
     // Background rotation uses turnDirection; currently left must increase yaw to move background right.
-    const manualTurnDirection = Number(flightControl.turnLeftPressed) - Number(flightControl.turnRightPressed);
+    const keyTurn = Number(flightControl.turnLeftPressed) - Number(flightControl.turnRightPressed);
+    const manualTurnDirection = keyTurn !== 0 ? keyTurn : flightControl.touchTurnStrength;
     const autopilotTargetWorldYaw = -Math.PI / 2 - flightState.heading;
     const autopilotWorldYawDelta = getShortestAngleDelta(
       autopilotTargetWorldYaw,

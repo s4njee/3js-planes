@@ -22,6 +22,10 @@ export function createInitialFlightControl() {
     descendPressed: false,
     turnLeftPressed: false,
     turnRightPressed: false,
+    // Touch drag steering: continuous -1…+1 values set by pointer handlers,
+    // blended into the same turn/elevation inputs as keyboard keys each frame.
+    touchTurnStrength: 0,
+    touchElevationStrength: 0,
     elevationOffset: ELEVATION_MIN_OFFSET,
     targetElevationOffset: ELEVATION_MIN_OFFSET,
     pitchOffset: 0,

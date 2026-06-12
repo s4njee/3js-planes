@@ -22,10 +22,12 @@ export const ANIMATION_SPEED_BOOST_MULTIPLIER = 1.4;
 
 // ── Touch interaction thresholds ───────────────────────────────────────────────
 
-export const TOUCH_LONG_PRESS_DELAY_MS = 420;
 export const TOUCH_TAP_MAX_MOVEMENT_PX = 12;
-export const TOUCH_DOUBLE_TAP_MAX_DELAY_MS = 300;
-export const TOUCH_DOUBLE_TAP_MAX_DISTANCE_PX = 24;
+// Drag-to-steer: dead zone before steering engages, and distance for full
+// authority. Each axis is evaluated independently so a pure horizontal drag
+// turns without pitching and vice versa.
+export const TOUCH_DRAG_DEAD_ZONE_PX = 18;
+export const TOUCH_DRAG_FULL_PX = 90;
 
 // ── Camera ─────────────────────────────────────────────────────────────────────
 
