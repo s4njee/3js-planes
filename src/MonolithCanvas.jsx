@@ -33,6 +33,9 @@ import {
   BOOST_SHAKE_X_AMPLITUDE,
   BOOST_SHAKE_Y_AMPLITUDE,
   BOOST_SHAKE_Z_AMPLITUDE,
+  CAMERA_TURN_SWAY_FACTOR,
+  CAMERA_TURN_ROLL_FACTOR,
+  AMBIENT_SHAKE_INTENSITY,
   BASE_SCENE_BACKGROUND,
   CINEMATIC_EXPOSURE_MULTIPLIER,
   CLOUDS_ENABLED,
@@ -76,6 +79,7 @@ import {
 } from './monolith/cesium-geospatial.js';
 import { flightCommandState } from './flight-store.js';
 import { createInitialFlightControl, createInitialMonolithState } from './monolith/flight-state.js';
+import { attachNavLights, updateNavLights } from './monolith/nav-lights.js';
 import { createMonolithEffectSnapshot, canTriggerMonolithGlitch } from './monolith/effects.js';
 
 const teleportScenePositionScratch = new THREE.Vector3();
@@ -424,6 +428,7 @@ function MonolithScene() {
     monolithRef.current = model;
     applyMonolithTransform();
     scene.add(monolithRef.current);
+    attachNavLights(monolithRef.current);
 
     if (animations?.length > 0) {
       mixerRef.current = new THREE.AnimationMixer(model);
@@ -1226,7 +1231,11 @@ function MonolithScene() {
     }
     const camRadius = 22;
     const camBaseY = 7.0;
-    const targetCamX = planePos.x;
+    // Chase-cam lag: swing toward the outside of the turn as the plane banks,
+    // and lean the view slightly into the bank. bankOffset is already smoothed
+    // so both effects ease in and out with the aircraft lean.
+    const bankOffsetNow = flightControlRef.current.bankOffset;
+    const targetCamX = planePos.x - bankOffsetNow * CAMERA_TURN_SWAY_FACTOR;
     const targetCamZ = planePos.z + camRadius;
     const targetCamY = planePos.y + camBaseY;
     camera.position.x = THREE.MathUtils.lerp(camera.position.x, targetCamX, delta * 6);
@@ -1239,6 +1248,11 @@ function MonolithScene() {
       controlsRef.current.target.z = THREE.MathUtils.lerp(controlsRef.current.target.z, planePos.z, delta * 6);
       controlsRef.current.target.y = THREE.MathUtils.lerp(controlsRef.current.target.y, targetLookY, delta * 4);
     }
+    // Roll the camera with the bank by tilting its up vector — OrbitControls'
+    // lookAt picks this up each update, and it returns to level as bankOffset
+    // lerps back to zero.
+    const cameraRoll = -bankOffsetNow * CAMERA_TURN_ROLL_FACTOR;
+    camera.up.set(Math.sin(cameraRoll), Math.cos(cameraRoll), 0);
     controlsRef.current?.update();
     mixerRef.current?.update(delta);
     materialManagerRef.current?.updateXrayAnimation(elapsed);
@@ -1298,6 +1312,9 @@ function MonolithScene() {
 
     applyMonolithTransform();
 
+    // ── Nav lights (after transform so flightState lat/lon is fresh) ────
+    updateNavLights(monolithRef.current, elapsed);
+
     // ── Exposure & FOV ──────────────────────────────────────────────────
     const targetExposure = guiParamsRef.current.exposure * (
       effectSnapshot.cinematicEnabled ? CINEMATIC_EXPOSURE_MULTIPLIER : 1
@@ -1317,11 +1334,14 @@ function MonolithScene() {
     camera.updateProjectionMatrix();
 
     // ── Camera shake ────────────────────────────────────────────────────
-    if (boostVisualState.intensity > 0.001) {
+    // Ambient turbulence keeps a faint shake during normal flight; boost
+    // ramps it up through the same offset.
+    const shakeIntensity = boostVisualState.intensity + AMBIENT_SHAKE_INTENSITY;
+    if (shakeIntensity > 0.001) {
       boostShakeOffset.set(
-        (Math.sin(elapsed * 23.0) + Math.sin(elapsed * 41.0 + 0.8)) * BOOST_SHAKE_X_AMPLITUDE * boostVisualState.intensity,
-        (Math.sin(elapsed * 31.0 + 1.2) + Math.sin(elapsed * 53.0)) * BOOST_SHAKE_Y_AMPLITUDE * boostVisualState.intensity,
-        (Math.sin(elapsed * 19.0 + 0.3) + Math.sin(elapsed * 47.0 + 2.4)) * BOOST_SHAKE_Z_AMPLITUDE * boostVisualState.intensity,
+        (Math.sin(elapsed * 23.0) + Math.sin(elapsed * 41.0 + 0.8)) * BOOST_SHAKE_X_AMPLITUDE * shakeIntensity,
+        (Math.sin(elapsed * 31.0 + 1.2) + Math.sin(elapsed * 53.0)) * BOOST_SHAKE_Y_AMPLITUDE * shakeIntensity,
+        (Math.sin(elapsed * 19.0 + 0.3) + Math.sin(elapsed * 47.0 + 2.4)) * BOOST_SHAKE_Z_AMPLITUDE * shakeIntensity,
       );
       camera.position.add(boostShakeOffset);
     }

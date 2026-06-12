@@ -34,7 +34,9 @@ export function computeSunDirection({ latRad, lonRad, hourUTC, dayOfYear = curre
 
 const PALETTES = [
   // elevation threshold, ambientInt, ambientHex, sunInt, sunHex, bgHex
-  { elev: -0.15, ambientInt: 0.10, ambientHex: 0x1a2440, sunInt: 0.0, sunHex: 0x446088, bgHex: 0x02030a },
+  // Night keeps a faint cool "moonlight" directional so the aircraft
+  // silhouette stays readable against the dark tiles.
+  { elev: -0.15, ambientInt: 0.16, ambientHex: 0x1a2440, sunInt: 0.18, sunHex: 0x446088, bgHex: 0x02030a },
   { elev:  0.00, ambientInt: 0.45, ambientHex: 0xffb07a, sunInt: 0.9, sunHex: 0xff6a2a, bgHex: 0x3a2a2e },
   { elev:  0.25, ambientInt: 0.90, ambientHex: 0xffffff, sunInt: 1.3, sunHex: 0xfff4d6, bgHex: 0x9cc4e8 },
 ];

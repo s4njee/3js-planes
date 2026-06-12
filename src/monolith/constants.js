@@ -36,6 +36,12 @@ export const BOOST_SHAKE_LERP_SPEED = 8;
 export const BOOST_SHAKE_X_AMPLITUDE = 0.035;
 export const BOOST_SHAKE_Y_AMPLITUDE = 0.025;
 export const BOOST_SHAKE_Z_AMPLITUDE = 0.05;
+// Chase-cam feel: lateral sway and view roll scale off the smoothed bank
+// offset (max ±0.38 rad), so both ease in/out with the same curve as the
+// aircraft lean. Ambient shake is a constant floor under the boost shake.
+export const CAMERA_TURN_SWAY_FACTOR = 5.0;
+export const CAMERA_TURN_ROLL_FACTOR = 0.16;
+export const AMBIENT_SHAKE_INTENSITY = 0.07;
 
 // ── Scene ──────────────────────────────────────────────────────────────────────
 
