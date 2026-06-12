@@ -22,6 +22,7 @@ import {
   LIGHTING_MODE_SCENE,
   LIGHTING_MODE_LABELS,
   ANIMATION_SPEED_BOOST_MULTIPLIER,
+  TOUCH_LONG_PRESS_MS,
   TOUCH_TAP_MAX_MOVEMENT_PX,
   TOUCH_DRAG_DEAD_ZONE_PX,
   BASE_CAMERA_FOV,
@@ -761,10 +762,13 @@ function MonolithScene() {
     controlsRef.current = controls;
 
     // ── Touch input state ─────────────────────────────────────────────────
-    // Tap = toggle boost. Single-finger drag = steer (horizontal: turn,
-    // vertical: altitude). Multi-touch cancels both gestures.
+    // Long-press (hold without dragging) → boost on while held; lift → off.
+    // Single-finger drag → steer (horizontal = turn, vertical = altitude).
+    // Multi-touch cancels both gestures.
     const touchState = {
       activePointers: new Map(),
+      longPressTimerId: null,
+      longPressActive: false,
     };
 
     const isTouchDevice = () => (
@@ -774,6 +778,19 @@ function MonolithScene() {
     const clearTouchSteering = () => {
       flightControlRef.current.touchTurnStrength = 0;
       flightControlRef.current.touchElevationStrength = 0;
+    };
+
+    const cancelLongPress = () => {
+      if (touchState.longPressTimerId !== null) {
+        window.clearTimeout(touchState.longPressTimerId);
+        touchState.longPressTimerId = null;
+      }
+    };
+
+    const stopBoostIfActive = () => {
+      if (!touchState.longPressActive) return;
+      touchState.longPressActive = false;
+      setAnimationSpeedBoost(false);
     };
 
     // ── Pointer event handlers ────────────────────────────────────────────
@@ -789,11 +806,23 @@ function MonolithScene() {
         cancelled: false,
       });
 
-      // Multi-touch: cancel steering and any ongoing single-finger gesture.
       if (touchState.activePointers.size > 1) {
+        // Multi-touch: cancel everything.
+        cancelLongPress();
+        stopBoostIfActive();
         clearTouchSteering();
         touchState.activePointers.forEach((p) => { p.cancelled = true; });
+        return;
       }
+
+      // Single finger down: start the long-press boost timer.
+      touchState.longPressTimerId = window.setTimeout(() => {
+        touchState.longPressTimerId = null;
+        const pointer = touchState.activePointers.get(event.pointerId);
+        if (!pointer || pointer.moved || pointer.cancelled) return;
+        touchState.longPressActive = true;
+        setAnimationSpeedBoost(true);
+      }, TOUCH_LONG_PRESS_MS);
     };
 
     const onPointerMove = (event) => {
@@ -810,14 +839,20 @@ function MonolithScene() {
       const dy = pointer.lastY - pointer.startY;
 
       if (Math.abs(dx) > TOUCH_TAP_MAX_MOVEMENT_PX || Math.abs(dy) > TOUCH_TAP_MAX_MOVEMENT_PX) {
-        pointer.moved = true;
+        if (!pointer.moved) {
+          pointer.moved = true;
+          // Movement cancels the long-press timer and any active boost.
+          cancelLongPress();
+          stopBoostIfActive();
+        }
       }
 
-      // Past the dead zone each axis acts exactly like holding the matching
-      // arrow key: full strength, no analog ramp. Left drag (dx < 0) → turn
-      // left (ArrowLeft). Up drag (dy < 0) → ascend (ArrowUp).
-      const step = (v) => (Math.abs(v) <= TOUCH_DRAG_DEAD_ZONE_PX ? 0 : Math.sign(v));
+      if (!pointer.moved) return;
 
+      // Past the dead zone each axis acts exactly like holding the matching
+      // arrow key: full strength, no analog ramp. Left drag (dx < 0) →
+      // turn left (ArrowLeft). Up drag (dy < 0) → ascend (ArrowUp).
+      const step = (v) => (Math.abs(v) <= TOUCH_DRAG_DEAD_ZONE_PX ? 0 : Math.sign(v));
       flightControlRef.current.touchTurnStrength = -step(dx);
       flightControlRef.current.touchElevationStrength = -step(dy);
     };
@@ -829,22 +864,11 @@ function MonolithScene() {
       if (!pointer) return;
 
       touchState.activePointers.delete(event.pointerId);
+      cancelLongPress();
 
-      // Always clear steering when the finger lifts; the next pointerdown
-      // establishes a fresh drag origin.
       if (touchState.activePointers.size === 0) {
+        stopBoostIfActive();
         clearTouchSteering();
-      }
-
-      // Tap (no significant movement, not cancelled, last finger up):
-      // toggle boost immediately.
-      if (
-        !pointer.cancelled
-        && !pointer.moved
-        && touchState.activePointers.size === 0
-        && supportsAnimationSpeedBoost()
-      ) {
-        setAnimationSpeedBoost(!stateRef.current.animationSpeedBoostEnabled);
       }
     };
 

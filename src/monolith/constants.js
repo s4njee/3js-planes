@@ -22,6 +22,7 @@ export const ANIMATION_SPEED_BOOST_MULTIPLIER = 1.4;
 
 // ── Touch interaction thresholds ───────────────────────────────────────────────
 
+export const TOUCH_LONG_PRESS_MS = 300;       // hold this long without dragging → boost on
 export const TOUCH_TAP_MAX_MOVEMENT_PX = 12;
 // Drag-to-steer: dead zone before an axis engages. Past it, each axis acts
 // exactly like holding the matching arrow key (full strength, no ramp), and
