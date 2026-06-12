@@ -24,7 +24,6 @@ import {
   ANIMATION_SPEED_BOOST_MULTIPLIER,
   TOUCH_TAP_MAX_MOVEMENT_PX,
   TOUCH_DRAG_DEAD_ZONE_PX,
-  TOUCH_DRAG_FULL_PX,
   BASE_CAMERA_FOV,
   BOOST_CAMERA_FOV,
   BOOST_FOV_LERP_SPEED,
@@ -746,6 +745,9 @@ function MonolithScene() {
     gl.domElement.style.zIndex = '1';
     gl.domElement.style.touchAction = 'none';
     gl.domElement.style.webkitTouchCallout = 'none';
+    gl.domElement.style.userSelect = 'none';
+    gl.domElement.style.webkitUserSelect = 'none';
+    gl.domElement.style.webkitTapHighlightColor = 'transparent';
     gl.domElement.style.transition = 'opacity 0.6s';
     gl.domElement.style.opacity = '0';
 
@@ -811,20 +813,13 @@ function MonolithScene() {
         pointer.moved = true;
       }
 
-      // Compute independent per-axis steering strength, each with its own
-      // dead zone and ramp. Left drag (dx < 0) → positive turn (left).
-      // Up drag (dy < 0) → positive elevation (ascend).
-      const ramp = (v) => {
-        const abs = Math.abs(v);
-        if (abs <= TOUCH_DRAG_DEAD_ZONE_PX) return 0;
-        return Math.sign(v) * Math.min(
-          (abs - TOUCH_DRAG_DEAD_ZONE_PX) / (TOUCH_DRAG_FULL_PX - TOUCH_DRAG_DEAD_ZONE_PX),
-          1,
-        );
-      };
+      // Past the dead zone each axis acts exactly like holding the matching
+      // arrow key: full strength, no analog ramp. Left drag (dx < 0) → turn
+      // left (ArrowLeft). Up drag (dy < 0) → ascend (ArrowUp).
+      const step = (v) => (Math.abs(v) <= TOUCH_DRAG_DEAD_ZONE_PX ? 0 : Math.sign(v));
 
-      flightControlRef.current.touchTurnStrength = -ramp(dx);
-      flightControlRef.current.touchElevationStrength = -ramp(dy);
+      flightControlRef.current.touchTurnStrength = -step(dx);
+      flightControlRef.current.touchElevationStrength = -step(dy);
     };
 
     const onPointerEnd = (event) => {

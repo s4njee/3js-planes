@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { timeOfDayState, subscribe, setHour } from './time-of-day-store.js';
+import { useMediaQuery, TABLET_QUERY } from './use-media-query.js';
 
 const MIN_HOUR = -3;
 const MAX_HOUR = 9.08;
@@ -16,6 +17,18 @@ const CONTAINER_STYLE = {
   alignItems: 'flex-end',
   gap: 4,
   userSelect: 'none',
+};
+
+// On phones the city search panel spans nearly the full width at the top, so
+// the slider moves to the bottom-left corner (free there — the minimap is
+// hidden on phones).
+const PHONE_CONTAINER_STYLE = {
+  ...CONTAINER_STYLE,
+  top: 'auto',
+  right: 'auto',
+  bottom: 24,
+  left: 16,
+  alignItems: 'flex-start',
 };
 
 const LABEL_STYLE = {
@@ -53,6 +66,7 @@ function formatUTC(h) {
 }
 
 export default function TimeOfDaySlider() {
+  const isTablet = useMediaQuery(TABLET_QUERY);
   const [hour, setLocalHour] = useState(timeOfDayState.hourUTC);
   const [animating, setAnimating] = useState(false);
   const rafRef = useRef(null);
@@ -99,7 +113,7 @@ export default function TimeOfDaySlider() {
   }
 
   return (
-    <div style={CONTAINER_STYLE}>
+    <div style={isTablet ? CONTAINER_STYLE : PHONE_CONTAINER_STYLE}>
       <span style={LABEL_STYLE}>{formatUTC(hour)}</span>
       <input
         type="range"

@@ -23,11 +23,10 @@ export const ANIMATION_SPEED_BOOST_MULTIPLIER = 1.4;
 // ── Touch interaction thresholds ───────────────────────────────────────────────
 
 export const TOUCH_TAP_MAX_MOVEMENT_PX = 12;
-// Drag-to-steer: dead zone before steering engages, and distance for full
-// authority. Each axis is evaluated independently so a pure horizontal drag
-// turns without pitching and vice versa.
+// Drag-to-steer: dead zone before an axis engages. Past it, each axis acts
+// exactly like holding the matching arrow key (full strength, no ramp), and
+// is evaluated independently so a pure horizontal drag turns without pitching.
 export const TOUCH_DRAG_DEAD_ZONE_PX = 18;
-export const TOUCH_DRAG_FULL_PX = 90;
 
 // ── Camera ─────────────────────────────────────────────────────────────────────
 
